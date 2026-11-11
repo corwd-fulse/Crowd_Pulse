@@ -5,6 +5,8 @@ import shutil
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
+from app.services.tracker import track_video
+
 router = APIRouter(
     prefix="/api/videos",
     tags=["Videos"],
@@ -12,6 +14,7 @@ router = APIRouter(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads" / "videos"
+RESULTS_DIR = BASE_DIR / "uploads" / "results"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -65,4 +68,22 @@ def upload_video(file: UploadFile = File(...)):
         "file_size": total_size,
         "status": "uploaded",
         "data_source": "user_upload",
+    }
+
+
+@router.post("/{video_id}/analyze")
+def analyze_video(video_id: str):
+    matches = list(UPLOAD_DIR.glob(f"{video_id}.*"))
+    if not matches:
+        raise HTTPException(status_code=404, detail="업로드된 영상을 찾을 수 없습니다.")
+
+    src_path = matches[0]
+    summary = track_video(src_path, RESULTS_DIR, video_id)
+
+    return {
+        "video_id": video_id,
+        "status": "analyzed",
+        "tracker": "bytetrack",
+        "model": "yolo11m.pt",
+        **summary,
     }
