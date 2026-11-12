@@ -16,7 +16,6 @@ import mimetypes
 from fastapi.responses import FileResponse
 
 
-from app.services.tracker import track_video
 
 router = APIRouter(
     prefix="/api/videos",
@@ -25,7 +24,6 @@ router = APIRouter(
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 UPLOAD_DIR = BASE_DIR / "uploads" / "videos"
-RESULTS_DIR = BASE_DIR / "uploads" / "results"
 
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -131,22 +129,9 @@ def upload_video(
     }
 
 
-@router.post("/{video_id}/analyze")
+@router.post("/{video_id}/analyze", deprecated=True)
 def analyze_video(video_id: str):
-    matches = list(UPLOAD_DIR.glob(f"{video_id}.*"))
-    if not matches:
-        raise HTTPException(status_code=404, detail="업로드된 영상을 찾을 수 없습니다.")
-
-    src_path = matches[0]
-    summary = track_video(src_path, RESULTS_DIR, video_id)
-
-    return {
-        "video_id": video_id,
-        "status": "analyzed",
-        "tracker": "bytetrack",
-        "model": "yolo11m.pt",
-        **summary,
-    }
+    raise HTTPException(410, 'Use POST /api/analysis/jobs with video_id; synchronous inference has been retired')
 
 
 # =====================================

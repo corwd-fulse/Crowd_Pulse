@@ -1,0 +1,83 @@
+{
+  "status": "candidate_unvalidated",
+  "approved_for_analysis": false,
+  "description": "Unvalidated manually selected ROI candidates for the supplied outdoor walkway video only. Do not automatically apply to other footage.",
+  "video_resolution": [
+    1920,
+    1080
+  ],
+  "coordinate_system": "Original image pixels; origin top-left; x right, y down. Polygons describe ground regions; person assignment uses bbox bottom-center.",
+  "source_video": "uploads/videos/81accb3dd82e489cb47190578ead674e.mp4",
+  "source_sha256": "a7ce34df58643e9a7cdba79ec4597dd3edadbca1f9cb25673efe2770c86e5b1b",
+  "source_fps": 25,
+  "source_frame_count": 404,
+  "reviewed_frame_indices": [
+    0,
+    101,
+    202,
+    303,
+    403
+  ],
+  "reviewed_frame_times_seconds": [
+    0,
+    4.04,
+    8.08,
+    12.12,
+    16.12
+  ],
+  "validation_notes": [
+    "Geometry checked only; sampled visual review does not establish validity across every frame.",
+    "Twenty-pixel unassigned gap between zones prevents shared boundaries; it can affect transition counts.",
+    "Only a conservative central subset of the walkway is covered, not the entire visible pedestrian area.",
+    "Pedestrians and carried objects can occlude the ground and affect optical flow.",
+    "Far/near are image-depth labels, not walking directions or physical entrances/exits.",
+    "No metric area calibration, detections or inference validation has been performed.",
+    "Existing Zone JSON loader reads zones only and does not enforce candidate status or source hash."
+  ],
+  "zones": [
+    {
+      "name": "walkway_far",
+      "description": "Candidate central walkway farther from camera; not an entrance/exit designation.",
+      "polygon": [
+        [
+          900,
+          650
+        ],
+        [
+          1420,
+          650
+        ],
+        [
+          1400,
+          790
+        ],
+        [
+          720,
+          790
+        ]
+      ]
+    },
+    {
+      "name": "walkway_near",
+      "description": "Candidate central walkway closer to camera; excludes side stairs and right seating/planters.",
+      "polygon": [
+        [
+          700,
+          810
+        ],
+        [
+          1390,
+          810
+        ],
+        [
+          1340,
+          1000
+        ],
+        [
+          540,
+          1000
+        ]
+      ]
+    }
+  ]
+}

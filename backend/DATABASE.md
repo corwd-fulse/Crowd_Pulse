@@ -1,5 +1,7 @@
 # CROWD PULSE 데이터베이스
 
+추가된 Vision CSV 저장 구조와 API는 [VISION_RESULTS.md](VISION_RESULTS.md)를 참고한다.
+
 PostgreSQL 17.11 / TimescaleDB 2.31.0. 연결은 기존 `app/database.py`의
 설정과 `backend/.env`를 사용한다. Alembic 설정 파일에는 자격 증명을 넣지 않는다.
 확장은 이미 설치되어 있어야 하며, 이 프로젝트의 마이그레이션은 확장을 설치하거나

@@ -9,6 +9,7 @@ from sqlalchemy import (
     Integer, Numeric, String, Text, UniqueConstraint, Uuid, func, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import JSONB
 
 from app.models.base import Base
 
@@ -37,6 +38,7 @@ class Video(Base):
     uploaded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     status: Mapped[str] = mapped_column(String(20), server_default="uploaded")
     data_source: Mapped[str] = mapped_column(String(30), server_default="user_upload")
+    roi_snapshot: Mapped[dict | None] = mapped_column(JSONB)
 
 
 
@@ -44,6 +46,7 @@ class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
 
     __table_args__ = (
+        CheckConstraint("analysis_profile IN ('fast', 'full')", name="ck_analysis_jobs_profile"),
         CheckConstraint(
             "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')",
             name="ck_analysis_jobs_status",
@@ -92,6 +95,10 @@ class AnalysisJob(Base):
         DateTime(timezone=True)
     )
     error_message: Mapped[str | None] = mapped_column(Text)
+    analysis_mode: Mapped[str] = mapped_column(String(20), server_default='production')
+    analysis_profile: Mapped[str] = mapped_column(String(10), server_default='full')
+    roi_snapshot: Mapped[dict | None] = mapped_column(JSONB)
+    worker_token: Mapped[UUID | None] = mapped_column(Uuid)
 
 
 class CrowdMetric(Base):

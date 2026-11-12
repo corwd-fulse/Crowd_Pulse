@@ -1,14 +1,16 @@
 
 from datetime import datetime
+from copy import deepcopy
+from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, settings
 from app.models.analytics import AnalysisJob, Video
 
 
@@ -18,12 +20,21 @@ router = APIRouter(
 )
 
 
+@router.get('/capabilities')
+def analysis_capabilities():
+    return {'test_analysis_enabled': settings.ALLOW_TEST_ANALYSIS,
+            'analysis_profiles': ['fast', 'full'],
+            'execution': 'external_worker', 'auto_start_worker': False}
+
+
 # =========================
 # Request / Response
 # =========================
 
 class AnalysisJobCreate(BaseModel):
     video_id: UUID
+    analysis_mode: Literal['production', 'test'] = 'production'
+    analysis_profile: Literal['fast', 'full'] = 'full'
 
 
 class AnalysisJobResponse(BaseModel):
@@ -37,6 +48,20 @@ class AnalysisJobResponse(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     error_message: str | None
+    analysis_mode: str
+    analysis_profile: str = 'full'
+    roi_snapshot: dict | None = Field(default=None, exclude=True)
+
+    @computed_field
+    @property
+    def roi_configured(self) -> bool:
+        """Expose request-time readiness without returning or mutating the snapshot."""
+        from app.services.vision_csv import validate_roi, InvalidResult
+        try:
+            validate_roi(self.roi_snapshot)
+            return True
+        except InvalidResult:
+            return False
 
 
 # =========================
@@ -53,6 +78,8 @@ def create_analysis_job(
     payload: AnalysisJobCreate,
     db: Session = Depends(get_db),
 ):
+    if payload.analysis_mode == 'test' and not settings.ALLOW_TEST_ANALYSIS:
+        raise HTTPException(status_code=403, detail='Test analysis is disabled on this API server')
     # 1. 분석할 영상 존재 여부 확인
     video = db.get(Video, payload.video_id)
 
@@ -83,10 +110,13 @@ def create_analysis_job(
         )
 
     # 3. 새로운 분석 작업 생성
-    # YOLO 모델 미연결이므로 queued 상태로 등록
+    # The independent worker polls this durable queue after commit.
     job = AnalysisJob(
         video_id=video.id,
         status="queued",
+        analysis_mode=payload.analysis_mode,
+        analysis_profile=payload.analysis_profile,
+        roi_snapshot=deepcopy(video.roi_snapshot),
     )
 
     try:
@@ -130,6 +160,10 @@ def create_analysis_job(
 )
 def get_analysis_jobs(
     video_id: UUID | None = None,
+    job_status: Literal['queued','running','succeeded','failed','cancelled'] | None = Query(None, alias='status'),
+    order_by: Literal['created_at','finished_at'] = Query('created_at'),
+    limit: int = Query(100, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
 ):
     query = select(AnalysisJob)
@@ -139,10 +173,13 @@ def get_analysis_jobs(
             AnalysisJob.video_id == video_id
         )
 
+    if job_status is not None:
+        query = query.where(AnalysisJob.status == job_status)
+    primary = AnalysisJob.finished_at if order_by == 'finished_at' else AnalysisJob.created_at
     query = query.order_by(
-        AnalysisJob.created_at.desc(),
+        primary.desc().nulls_last(),
         AnalysisJob.id.desc(),
-    ).limit(100)
+    ).offset(offset).limit(limit)
 
     return db.scalars(query).all()
 

@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     DB_NAME: str
     DB_USER: str
     DB_PASSWORD: str
+    ALLOW_TEST_ANALYSIS: bool = False
 
     model_config = SettingsConfigDict(
         env_file=BASE_DIR / ".env",

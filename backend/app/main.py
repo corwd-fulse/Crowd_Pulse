@@ -7,6 +7,8 @@ from routers.dashboard import router as dashboard_router
 from app.database import check_database_connection
 from routers.videos import router as videos_router
 from routers import analysis
+from routers.vision_results import router as vision_results_router
+from routers.video_rois import router as video_rois_router
 
 
 app = FastAPI(
@@ -21,6 +23,8 @@ app.include_router(dashboard_router)
 app.include_router(videos_router)
 
 app.include_router(analysis.router)
+app.include_router(vision_results_router)
+app.include_router(video_rois_router)
 
 # React 개발 서버 접근 허용
 app.add_middleware(

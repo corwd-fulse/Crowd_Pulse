@@ -22,23 +22,34 @@ def run_zone_pipeline(
     detections_csv: str,
     zones: list[Zone],
     out_dir: str,
+    *, analysis_profile: str = 'full',
 ) -> dict[str, str]:
     """반환: {결과종류: 저장된 csv 경로}.
 
     video_path: optical_flow 계산에 쓰는 원본 영상(detections.csv 좌표만으론 안 됨).
     detections_csv: tracker.py가 만든 frame,t_ms,track_id,x1,y1,x2,y2,conf 형식 csv.
     """
+    if analysis_profile not in ('fast', 'full'):
+        raise ValueError('Invalid analysis profile')
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    fps = cv2.VideoCapture(video_path).get(cv2.CAP_PROP_FPS) or 30.0
+    cap = cv2.VideoCapture(video_path)
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    finally:
+        cap.release()
 
     zone_ts = compute_zone_timeseries(detections_csv, zones, fps=fps)
-    motion_ts = compute_zone_motion(video_path, zones, fps=fps)
+    motion_ts = (compute_zone_motion(video_path, zones, fps=fps) if analysis_profile == 'full'
+                 else pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence']))
     individual = compute_individual_directions(detections_csv)
     individual_zone_agg = aggregate_by_zone(individual, detections_csv, zones, fps=fps)
 
-    merged = zone_ts.merge(motion_ts[["sec", "zone", "motion"]], on=["sec", "zone"], how="left")
-    scores = compute_bottleneck_scores(merged)
+    if analysis_profile == 'full':
+        merged = zone_ts.merge(motion_ts[["sec", "zone", "motion"]], on=["sec", "zone"], how="left")
+        scores = compute_bottleneck_scores(merged)
+    else:
+        scores = pd.DataFrame(columns=['window_start','zone','score','growth','slowdown','imbalance','risk_level'])
 
     paths = {
         "crowd_observations": out / "crowd_observations.csv",
