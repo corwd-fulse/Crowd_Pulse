@@ -1,9 +1,13 @@
 
 from pathlib import Path
-from uuid import uuid4
-import shutil
+from uuid import UUID, uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
+
+from app.database import get_db
+from app.models import Video
 
 router = APIRouter(
     prefix="/api/videos",
@@ -20,7 +24,7 @@ MAX_FILE_SIZE = 200 * 1024 * 1024  # 200MB
 
 
 @router.post("/upload", status_code=201)
-def upload_video(file: UploadFile = File(...)):
+def upload_video(file: UploadFile = File(...), db: Session = Depends(get_db)):
     original_name = file.filename or ""
 
     extension = Path(original_name).suffix.lower()
@@ -51,7 +55,27 @@ def upload_video(file: UploadFile = File(...)):
 
                 destination.write(chunk)
 
+        db.add(Video(
+            id=UUID(hex=video_id),
+            filename=original_name,
+            saved_filename=saved_name,
+            storage_path=f"uploads/videos/{saved_name}",
+            file_size=total_size,
+            content_type=file.content_type,
+            # Capture time/duration cannot be inferred from the upload time.
+        ))
+        db.commit()
+
+    except SQLAlchemyError:
+        db.rollback()
+        saved_path.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=503,
+            detail="영상 정보를 저장할 수 없습니다. 잠시 후 다시 시도하세요.",
+        ) from None
+
     except Exception:
+        db.rollback()
         saved_path.unlink(missing_ok=True)
         raise
 

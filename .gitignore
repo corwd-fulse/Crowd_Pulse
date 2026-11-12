@@ -44,3 +44,9 @@ Thumbs.db
 
 # Uploaded video files
 backend/uploads/
+
+# =========================
+# Database backups
+# =========================
+/backup/
+*.backup
