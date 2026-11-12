@@ -58,7 +58,7 @@ def test_offline_migration_is_additive_and_has_hypertable_ddl():
     sql = output.getvalue().upper()
     for name in Base.metadata.tables:
         assert f"CREATE TABLE {name.upper()}" in sql
-    assert sql.count("SELECT CREATE_HYPERTABLE(") == 2
+    assert sql.count("SELECT CREATE_HYPERTABLE(") == 4
     assert "BY_RANGE('ANALYZED_AT'" in sql
     assert "BY_RANGE('PREDICTED_AT'" in sql
     for forbidden in ["DROP TABLE", "TRUNCATE", "CREATE EXTENSION", "ALTER SYSTEM", "DELETE FROM"]:

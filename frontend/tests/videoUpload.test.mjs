@@ -65,7 +65,7 @@ test('analysis job creation sends video_id and refresh returns server status', a
   api.defaults.adapter = async (config) => {
     if (config.method === 'post') {
       assert.equal(config.url, '/api/analysis/jobs');
-      assert.deepEqual(JSON.parse(config.data), {video_id: job.video_id});
+      assert.deepEqual(JSON.parse(config.data), {video_id: job.video_id, analysis_profile: 'full'});
     } else {
       assert.equal(config.method, 'get');
       assert.equal(config.url, '/api/analysis/jobs/job-id');

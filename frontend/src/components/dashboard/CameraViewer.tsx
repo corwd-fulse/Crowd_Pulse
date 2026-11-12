@@ -1,11 +1,13 @@
 
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
+import MonitoringPlayer from './MonitoringPlayer';
 
 import {
   uploadVideo,
   createAnalysisJob,
   getAnalysisJob,
+  getVideoRoi,
 } from '../../services/api';
 
 import type {
@@ -28,18 +30,23 @@ const STATUS_LABELS: Record<AnalysisJobResponse['status'], string> = {
 };
 
 
-export default function CameraViewer() {
+export default function CameraViewer({onJobCreated, trackedJob}: {onJobCreated?: (job: AnalysisJobResponse) => void; trackedJob?: AnalysisJobResponse | null}) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
+  const [localForJob,setLocalForJob]=useState<string|null>();
+  const showLocal=!!videoUrl&&localForJob===(trackedJob?.id??null);
+  const showServer=!!trackedJob&&!showLocal;
 
   const [isUploading, setIsUploading] = useState(false);
   const [isRequestingAnalysis, setIsRequestingAnalysis] = useState(false);
+  const [analysisProfile,setAnalysisProfile]=useState<'fast'|'full'>('fast');
 
   const [error, setError] = useState('');
   const [analysisError, setAnalysisError] = useState('');
 
   const [result, setResult] = useState<VideoUploadResponse | null>(null);
-  const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
+  const [requestedJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
+  const analysisJob = requestedJob && trackedJob?.id === requestedJob.id && (requestedJob.status === 'queued' || requestedJob.status === 'running') ? trackedJob : requestedJob;
 
   const uploadInProgress = useRef(false);
   const analysisInProgress = useRef(false);
@@ -86,6 +93,7 @@ export default function CameraViewer() {
     const url = URL.createObjectURL(file);
 
     setVideoUrl(url);
+    setLocalForJob(trackedJob?.id??null);
     setFileName(file.name);
 
     uploadInProgress.current = true;
@@ -144,10 +152,16 @@ export default function CameraViewer() {
     setAnalysisError('');
 
     try {
-      const job = await createAnalysisJob(result.video_id);
+      const roi=await getVideoRoi(result.video_id);
+      if(!roi||roi.roi_snapshot.status!=='approved'||roi.roi_snapshot.approved_for_analysis!==true){
+        if(version===requestVersion.current)setAnalysisError('분석 요청 전 영상 관리에서 ROI를 저장하고 승인을 확인하세요. 후보 ROI 테스트는 영상 관리의 테스트 모드를 사용하세요.');
+        return;
+      }
+      const job = await createAnalysisJob(result.video_id, 'production', analysisProfile);
 
       if (version === requestVersion.current) {
         setAnalysisJob(job);
+        onJobCreated?.(job);
       }
     } catch (error: unknown) {
       if (version !== requestVersion.current) return;
@@ -216,28 +230,29 @@ export default function CameraViewer() {
             <span
               aria-hidden="true"
               className={`h-2 w-2 rounded-full ${
-                videoUrl ? 'bg-ok' : 'bg-side-text/50'
+                showServer||videoUrl ? 'bg-ok' : 'bg-side-text/50'
               }`}
             />
-            {videoUrl ? '로컬 영상 재생 중' : '연결 대기'}
+            {showServer?'서버 영상 재생':showLocal?'로컬 영상 미리보기':'연결 대기'}
           </span>
 
-          <span className="text-side-text/70">로컬 데모</span>
+          <span className="text-side-text/70">{showServer?'선택한 분석 작업 연결':'탐지 결과 연결 안 됨'}</span>
         </p>
       </div>
 
       {/* 영상 미리보기 */}
-      <div className="monitor-stage relative flex h-[280px] min-h-0 flex-1 items-center justify-center bg-monitor sm:h-[340px] xl:min-h-[300px]">
-        {videoUrl ? (
+      <div className="monitor-stage relative min-w-0 bg-monitor" style={{height:'auto',minHeight:0,flexShrink:0}}>
+        {showServer&&trackedJob?<MonitoringPlayer key={trackedJob.id} job={trackedJob}/>:showLocal&&videoUrl ? (
           <video
             key={videoUrl}
             src={videoUrl}
             controls
             playsInline
-            className="absolute inset-0 h-full w-full object-contain"
+            aria-label="대시보드 로컬 영상"
+            className="block max-h-[440px] w-full object-contain"
           />
         ) : (
-          <div className="relative z-10 px-6 text-center">
+          <div className="relative z-10 px-6 py-16 text-center">
             <div className="monitor-reticle" aria-hidden="true">
               <span />
             </div>
@@ -253,10 +268,17 @@ export default function CameraViewer() {
         )}
       </div>
 
+      <div className="flex flex-wrap gap-2 border-t border-line px-5 py-3 text-xs text-ink-soft">
+        {trackedJob&&<button type="button" disabled={showServer} onClick={()=>{setLocalForJob(undefined);}} className="rounded-sm border border-line px-3 py-2 disabled:opacity-40">선택 작업의 서버 영상 보기</button>}
+        {videoUrl&&<button type="button" disabled={showLocal} onClick={()=>{setLocalForJob(trackedJob?.id??null);}} className="rounded-sm border border-line px-3 py-2 disabled:opacity-40">업로드 영상 미리보기</button>}
+        {showLocal&&<p>{isUploading?'로컬 파일 재생 · 서버 업로드 중':result?'로컬 파일 재생 · 서버 업로드 완료 · 선택 작업의 탐지 결과는 겹치지 않습니다.':'로컬 파일만 재생 · 서버 업로드 미완료 · 탐지 결과 없음'}</p>}
+      </div>
+
       {/* 영상 업로드 / 분석 요청 */}
+      <label className="block px-4 py-2 text-xs text-ink-soft">분석 범위 <select aria-label="대시보드 분석 범위" value={analysisProfile} onChange={e=>setAnalysisProfile(e.target.value as 'fast'|'full')} disabled={isRequestingAnalysis||!!analysisJob} className="rounded-sm border border-line bg-surface p-2"><option value="fast">FAST — 빠른 분석</option><option value="full">FULL — 정밀 분석</option></select></label>
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line bg-surface px-5 py-3">
         <p className="min-w-0 truncate text-[13px] text-ink-soft">
-          {videoUrl ? (
+          {showServer&&trackedJob?<span className="break-all">선택 작업의 서버 영상 · {trackedJob.video_id}</span>:videoUrl ? (
             <>
               <span className="text-muted">선택된 영상</span>{' '}
               <span className="font-medium">{fileName}</span>
@@ -365,6 +387,7 @@ export default function CameraViewer() {
               {analysisError}
             </p>
           )}
+          <a href="/videos" className="mb-2 inline-block text-brand underline">영상 관리에서 ROI와 분석 작업 확인</a>
 
           {analysisJob ? (
             <div className="space-y-2">
@@ -415,7 +438,7 @@ export default function CameraViewer() {
       <p className="border-t border-line bg-sunken px-5 py-3 text-[11px] leading-relaxed text-muted">
         선택한 영상은 로컬 미리보기와 서버 업로드를 지원합니다.
         분석 요청 시 작업이 대기열에 등록됩니다.
-        실제 YOLO 객체 탐지 및 혼잡도 분석은 AI 모델 연동 후 제공됩니다.
+        실제 분석은 별도 Worker에서 처리하며, 완료된 작업의 저장 결과를 대시보드에서 확인할 수 있습니다.
       </p>
     </section>
   );
