@@ -64,4 +64,3 @@ forecast/*.parquet
 forecast/lgbm_*.txt
 forecast/lstm_1h_v*.pt
 forecast/__pycache__/
-*.pdf
