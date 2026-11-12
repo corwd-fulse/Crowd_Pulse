@@ -54,6 +54,11 @@ SessionLocal = sessionmaker(
 )
 
 
+def get_db():
+    with SessionLocal() as session:
+        yield session
+
+
 # DB 연결 테스트
 def check_database_connection() -> bool:
     with engine.connect() as connection:
