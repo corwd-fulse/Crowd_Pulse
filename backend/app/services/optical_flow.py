@@ -25,7 +25,13 @@ def _zone_mask(zone: Zone, shape: tuple[int, int]) -> np.ndarray:
 
 
 def compute_zone_motion(video_path: str, zones: list[Zone], fps: float | None = None) -> pd.DataFrame:
-    """반환: columns = [sec, zone, angle_deg, magnitude_px, motion, low_confidence]."""
+    """반환: columns = [sec, zone, angle_deg, magnitude_px, motion, low_confidence].
+
+    주의: 각도를 프레임마다 구한 뒤 "각도끼리" 평균 내면 0/360도 경계(예: 358도와 2도)에서
+    산술평균이 180도처럼 완전히 틀린 값이 나온다(원형 통계 문제). 그래서 프레임별 각도/크기로
+    바꾸기 전의 (mx, my) 벡터 성분 상태로 누적해서 평균 낸 뒤, 마지막에 한 번만 각도/크기로
+    변환한다 — 벡터 합산은 경계를 지나도 불연속이 없다.
+    """
     cap = cv2.VideoCapture(video_path)
     fps = fps or cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -57,26 +63,24 @@ def compute_zone_motion(video_path: str, zones: list[Zone], fps: float | None = 
 
         for name, mask in masks.items():
             if scene_change:
-                rows.append((sec, name, None, None, None, True))
+                rows.append((sec, name, None, None, True))
                 continue
             fx = flow[..., 0][mask == 1]
             fy = flow[..., 1][mask == 1]
             if fx.size < MIN_VECTORS:
-                rows.append((sec, name, None, None, None, True))
+                rows.append((sec, name, None, None, True))
                 continue
-            mx, my = float(fx.mean()), float(fy.mean())
-            magnitude = (mx**2 + my**2) ** 0.5
-            angle = float(np.degrees(np.arctan2(my, mx)) % 360)
-            rows.append((sec, name, angle, magnitude, magnitude / diag * 100, False))
+            rows.append((sec, name, float(fx.mean()), float(fy.mean()), False))
     cap.release()
 
-    df = pd.DataFrame(rows, columns=columns)
-    return (
+    df = pd.DataFrame(rows, columns=["sec", "zone", "mx", "my", "low_confidence"])
+    agg = (
         df.groupby(["sec", "zone"], as_index=False)
-        .agg(
-            angle_deg=("angle_deg", "mean"),
-            magnitude_px=("magnitude_px", "mean"),
-            motion=("motion", "mean"),
-            low_confidence=("low_confidence", "any"),
-        )
+        .agg(mx=("mx", "mean"), my=("my", "mean"), low_confidence=("low_confidence", "any"))
     )
+    magnitude = np.sqrt(agg["mx"] ** 2 + agg["my"] ** 2)
+    agg["magnitude_px"] = magnitude
+    agg["motion"] = magnitude / diag * 100
+    agg["angle_deg"] = np.degrees(np.arctan2(agg["my"], agg["mx"])) % 360
+    agg.loc[agg["low_confidence"], ["angle_deg", "magnitude_px", "motion"]] = None
+    return agg[columns]
