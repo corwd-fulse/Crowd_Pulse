@@ -1,0 +1,91 @@
+{
+  "note": "인구 단위(명). test는 2026-10 전체 31만 7,688건(학습 ~2026-08, 검증 2026-09). LSTM은 36에폭 시드 0 한 모델, 롤링은 7~10월 4 fold 평균.",
+  "test_2026-10": {
+    "Seasonal Naive": {
+      "MAE": 1227.67,
+      "RMSE": 4275.55,
+      "sMAPE_pct": 4.532
+    },
+    "LightGBM": {
+      "MAE": 262.68,
+      "RMSE": 524.88,
+      "sMAPE_pct": 1.09
+    },
+    "LSTM_36ep": {
+      "MAE": 232.18,
+      "RMSE": 435.93,
+      "sMAPE_pct": 0.985
+    }
+  },
+  "rolling_mean_7_10": {
+    "LightGBM": {
+      "MAE": 250.41,
+      "RMSE": 492.84,
+      "sMAPE": 1.04
+    },
+    "LSTM_36ep": {
+      "MAE": 231.18,
+      "RMSE": 440.69,
+      "sMAPE": 0.98
+    },
+    "Persistence": {
+      "MAE": 805.95,
+      "RMSE": 2192.33,
+      "sMAPE": 2.89
+    },
+    "Seasonal Naive": {
+      "MAE": 927.34,
+      "RMSE": 3192.93,
+      "sMAPE": 3.52
+    }
+  },
+  "lstm_seeds_test_2026-10": {
+    "seeds": [
+      0,
+      1,
+      2
+    ],
+    "per_seed": [
+      {
+        "seed": 0,
+        "MAE": 232.18,
+        "RMSE": 435.93,
+        "sMAPE": 0.98,
+        "MAE_surge": 659.98
+      },
+      {
+        "seed": 1,
+        "MAE": 233.62,
+        "RMSE": 444.86,
+        "sMAPE": 0.99,
+        "MAE_surge": 666.33
+      },
+      {
+        "seed": 2,
+        "MAE": 231.73,
+        "RMSE": 433.0,
+        "sMAPE": 0.98,
+        "MAE_surge": 659.75
+      }
+    ],
+    "mean_std": {
+      "MAE": [
+        232.51,
+        0.99
+      ],
+      "RMSE": [
+        437.93,
+        6.18
+      ],
+      "sMAPE": [
+        0.98,
+        0.01
+      ],
+      "MAE_surge": [
+        662.02,
+        3.73
+      ]
+    },
+    "note": "36에폭 같은 설정, 시드만 다름. 서빙 모델은 시드 0. sMAPE는 %."
+  }
+}
