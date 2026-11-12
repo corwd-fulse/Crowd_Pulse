@@ -1,3 +1,4 @@
+
 // 사이드바 메뉴와 헤더 제목이 같은 목록을 쓰도록 한 곳에서 관리한다.
 export interface NavItem {
   label: string;
@@ -17,7 +18,12 @@ export const navGroups: NavGroup[] = [
       {
         label: '종합 대시보드',
         path: '/dashboard',
-        description: '실시간 인파 현황과 혼잡 위험을 확인합니다.',
+        description: '전체 인파 현황과 혼잡 위험을 확인합니다.',
+      },
+      {
+        label: '영상 관리',
+        path: '/videos',
+        description: '업로드한 영상과 AI 분석 작업 이력을 관리합니다.',
       },
       {
         label: '실시간 모니터링',
@@ -53,4 +59,6 @@ export const navGroups: NavGroup[] = [
   },
 ];
 
-export const navItems: NavItem[] = navGroups.flatMap((group) => group.items);
+export const navItems: NavItem[] = navGroups.flatMap(
+  (group) => group.items
+);
