@@ -1,0 +1,53 @@
+{
+  "task": "서울 행정동 생활인구 1시간 뒤 예측",
+  "areas": 427,
+  "lookback_h": 168,
+  "train_period": "2025-11-01 ~ 2026-08-31",
+  "val_period": "2026-09",
+  "test_period": "2026-10",
+  "scale": {
+    "file": "scale.csv",
+    "rule": "동별 학습 구간(~2026-08-31 23시) 평균 인구(명). 입력 / scale = 모델 입력 비율값",
+    "sha256": "f889aa2ff08abc7a148f95adc61af38c049cf21fc90613ae2b232394fccafaca"
+  },
+  "dong_order": {
+    "file": "dong_order.json",
+    "sha256": "ecb53a0724c2a129ba7800f0150fc36ae19aa974f69c691b4b5fca74bbad4b21"
+  },
+  "feature_cols": {
+    "file": "feature_cols.json",
+    "sha256": "830fbfae4feeefe4fad1d0b5c0ae97ab1eed70974d515cf77d375f9e5f3c4d01"
+  },
+  "models": {
+    "seasonal_naive": {
+      "version": "seasonal-naive-168h",
+      "file": null,
+      "rule": "y(T) = 실측(T-168시간)"
+    },
+    "lightgbm": {
+      "version": "lightgbm-1h-v1",
+      "file": "lgbm_1h.txt.gz",
+      "sha256": "4a669b04c36f3b7c7507d90bd312625672ea4450330ed473491e09d333b4f697",
+      "trained_at": "2026-11-11T14:47:00+09:00",
+      "params": {
+        "objective": "l1",
+        "learning_rate": 0.05,
+        "num_leaves": 127,
+        "rounds": 4000
+      }
+    },
+    "lstm": {
+      "version": "lstm-1h-36ep-seed0",
+      "file": "lstm_1h_36ep.pt",
+      "sha256": "e3eefd4c1f83bcc0baf837ef283f64a103261ba9058267e3d1156bd34543b802",
+      "trained_at": "2026-11-12T15:27:00+09:00",
+      "params": {
+        "hidden": 96,
+        "layers": 2,
+        "epochs": 36,
+        "lr": "cosine 2e-3 -> 1e-5",
+        "seed": 0
+      }
+    }
+  }
+}
