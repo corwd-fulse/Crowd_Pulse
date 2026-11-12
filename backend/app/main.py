@@ -6,6 +6,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from routers.dashboard import router as dashboard_router
 from app.database import check_database_connection
 from routers.videos import router as videos_router
+from routers import analysis
 
 
 app = FastAPI(
@@ -18,6 +19,8 @@ app = FastAPI(
 app.include_router(dashboard_router)
 
 app.include_router(videos_router)
+
+app.include_router(analysis.router)
 
 # React 개발 서버 접근 허용
 app.add_middleware(

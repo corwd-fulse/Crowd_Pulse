@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     BigInteger, CheckConstraint, DateTime, Float, ForeignKey, Index,
-    Integer, Numeric, String, Text, UniqueConstraint, Uuid, func,
+    Integer, Numeric, String, Text, UniqueConstraint, Uuid, func, text,
 )
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -39,22 +39,58 @@ class Video(Base):
     data_source: Mapped[str] = mapped_column(String(30), server_default="user_upload")
 
 
+
 class AnalysisJob(Base):
     __tablename__ = "analysis_jobs"
+
     __table_args__ = (
-        CheckConstraint("status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')", name="ck_analysis_jobs_status"),
-        CheckConstraint("finished_at IS NULL OR (started_at IS NOT NULL AND finished_at >= started_at)", name="ck_analysis_jobs_times"),
-        Index("ix_analysis_jobs_video_created", "video_id", "created_at"),
-        Index("ix_analysis_jobs_status", "status"),
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')",
+            name="ck_analysis_jobs_status",
+        ),
+        CheckConstraint(
+            "finished_at IS NULL OR (started_at IS NOT NULL AND finished_at >= started_at)",
+            name="ck_analysis_jobs_times",
+        ),
+        Index(
+            "ix_analysis_jobs_video_created",
+            "video_id",
+            "created_at",
+        ),
+        Index(
+            "ix_analysis_jobs_status",
+            "status",
+        ),
+        # 같은 영상에 진행 중인 분석 작업은 하나만 허용
+        Index(
+            "uq_analysis_jobs_active_video",
+            "video_id",
+            unique=True,
+            postgresql_where=text(
+                "status IN ('queued', 'running')"
+            ),
+        ),
     )
 
-    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
-    video_id: Mapped[UUID] = mapped_column(ForeignKey("videos.id", ondelete="RESTRICT"))
-    status: Mapped[str] = mapped_column(String(20), server_default="queued")
+    id: Mapped[UUID] = mapped_column(
+        Uuid, primary_key=True, default=uuid4
+    )
+    video_id: Mapped[UUID] = mapped_column(
+        ForeignKey("videos.id", ondelete="RESTRICT")
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), server_default="queued"
+    )
     model_version: Mapped[str | None] = mapped_column(String(100))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     error_message: Mapped[str | None] = mapped_column(Text)
 
 
