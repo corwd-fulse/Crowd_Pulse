@@ -24,6 +24,18 @@ class JobNotFound(LookupError):
     pass
 
 
+def _cleanup_created_dir(created_dir: Path | None) -> None:
+    """Removes a just-created 'import-*' staging dir after a failed import, and only that
+    one — never anything it didn't just create itself. Shared with vision_extended_results.py,
+    which stores a separate kind of result under the same uploads/results root."""
+    if created_dir is None:
+        return
+    resolved = created_dir.resolve()
+    managed_root = (BASE_DIR / 'uploads/results').resolve()
+    if resolved.is_relative_to(managed_root) and resolved != managed_root and created_dir.name.startswith('import-'):
+        shutil.rmtree(created_dir)
+
+
 def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, metadata: ExecutionMetadata, *, worker_token: UUID | None = None):
     roi_status, manifest, records = validate_bundle(paths, roi, metadata)
     try:
@@ -128,12 +140,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
         return result, True
     except Exception:
         db.rollback()
-        if created_dir is not None:
-            # Only the fresh directory allocated by this call is ever removed.
-            resolved = created_dir.resolve()
-            managed_root = (BASE_DIR / 'uploads/results').resolve()
-            if resolved.is_relative_to(managed_root) and resolved != managed_root and created_dir.name.startswith('import-'):
-                shutil.rmtree(created_dir)
+        _cleanup_created_dir(created_dir)
         raise
 
 

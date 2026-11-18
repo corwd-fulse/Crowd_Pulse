@@ -15,10 +15,11 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from app.services.vision_csv import MAX_FILE_BYTES, Row as _CoreRow
+
 Nonnegative = Annotated[float, Field(ge=0)]
 Unit = Annotated[float, Field(ge=0, le=1)]
 Angle = Annotated[float, Field(ge=0, lt=360)]
-MAX_FILE_BYTES = 64 * 1024 * 1024
 
 CSV_SCHEMAS = {
     'dwell_times': ['track_id', 'zone', 'enter_sec', 'exit_sec', 'dwell_s'],
@@ -36,22 +37,20 @@ class InvalidExtendedResult(ValueError):
     pass
 
 
-class _Row(BaseModel):
-    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+class _Row(_CoreRow):
+    """vision_csv.Row의 csv_bool/empty_numeric을 그대로 물려받는다(bool/빈문자열 파싱 규칙이
+    두 군데서 따로 어긋나지 않도록). 여기서는 core에 없는 필드 이름(is_queue 등)에 대해서만
+    같은 검증을 추가로 붙인다."""
 
-    @field_validator('low_confidence', 'reliable', 'is_queue', mode='before', check_fields=False)
+    @field_validator('is_queue', mode='before', check_fields=False)
     @classmethod
-    def csv_bool(cls, value):
-        if type(value) is bool:
-            return value
-        if isinstance(value, str) and value.lower() in ('true', 'false'):
-            return value.lower() == 'true'
-        raise ValueError('Expected True or False')
+    def csv_bool_extended(cls, value):
+        return cls.csv_bool(value)
 
     @field_validator('mean_angle_deg', 'reverse_ratio', 'speed_mps', mode='before', check_fields=False)
     @classmethod
-    def empty_numeric(cls, value):
-        return None if value == '' else value
+    def empty_numeric_extended(cls, value):
+        return cls.empty_numeric(value)
 
 
 class DwellTime(_Row):

@@ -42,6 +42,16 @@ def test_dict_calibration_is_rejected_before_touching_db(tmp_path):
         extended_storage.store_extended_result(None, None, paths, pixels_per_meter={'near': 50.0})
 
 
+def test_individual_speed_without_calibration_is_rejected_before_touching_db(tmp_path):
+    # crowd_speed_individual만 있고 crowd_speed_zone은 없는 경우도 pixels_per_meter 없이는
+    # 막혀야 한다 — 어느 파일이든 속도(m/s) 값은 보정값 기록 없이 저장되면 안 된다.
+    paths = _extended_paths(tmp_path, {
+        'crowd_speed_individual': 'frame,t_ms,track_id,speed_mps,reliable\n1,33,1,1.1,True\n',
+    })
+    with pytest.raises(InvalidExtendedResult):
+        extended_storage.store_extended_result(None, None, paths)
+
+
 @pytest.mark.integration
 def test_extended_result_requires_core_result_first(db, seeded, tmp_path):
     paths = _extended_paths(tmp_path)

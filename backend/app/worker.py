@@ -362,6 +362,8 @@ class Worker:
                         individual_directions=pd.read_csv(paths['individual_directions']),
                     )
                     extended_paths = {kind:Path(path).resolve() for kind,path in extended_paths.items()}
+                    if any(not p.is_relative_to(out.resolve()) for p in extended_paths.values()):
+                        raise InputFailure('EXTENDED_PIPELINE_OUTPUT_PATH_NOT_ALLOWED')
                     with self.sessions() as db:
                         extended_storage.store_extended_result(db,claim.job_id,extended_paths,
                                                                 pixels_per_meter=self.pixels_per_meter)
