@@ -23,6 +23,7 @@ from sqlalchemy.orm import sessionmaker
 from app.database import engine
 from app.models import AnalysisJob, Video, VisionResult
 from app.services import vision_results as storage
+from app.services import vision_extended_results as extended_storage
 from app.services.vision_csv import ExecutionMetadata, InvalidResult, SCHEMAS, validate_roi
 from app.services.inference_runtime import normalize_device, check_device, InferenceFailure, is_cuda_oom
 
@@ -74,6 +75,7 @@ def video_info(path):
 class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
+                 extended_pipeline=None, pixels_per_meter=None,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
@@ -89,6 +91,8 @@ class Worker:
         self.allow_test = allow_test
         self.track = track
         self.pipeline = pipeline
+        self.extended_pipeline = extended_pipeline
+        self.pixels_per_meter = pixels_per_meter
         self.inspect_video = inspect_video
         self.heartbeat_seconds = heartbeat_seconds
         # Isolated tests and explicit --once --job-id checks restrict queue scope.
@@ -305,7 +309,8 @@ class Worker:
                     pipeline = run_zone_pipeline
                 else:
                     pipeline = self.pipeline
-                pipeline_args = (str(source),str(detections),load_zones_from_json(str(roi_path)),str(out/'pipeline'))
+                zones = load_zones_from_json(str(roi_path))
+                pipeline_args = (str(source),str(detections),zones,str(out/'pipeline'))
                 # Preserve legacy four-argument FULL adapters.
                 paths = (pipeline(*pipeline_args, analysis_profile='fast') if claim.analysis_profile == 'fast'
                          else pipeline(*pipeline_args))
@@ -329,6 +334,26 @@ class Worker:
             stage = 'RESULT_STORAGE'
             with self.sessions() as db:
                 storage.store_result(db,claim.job_id,paths,claim.roi,metadata,worker_token=claim.token)
+            # Extended metrics (dwell/counter-flow/queue/heatmap/tracking-quality) are a
+            # best-effort bonus on top of the core FR-ZON result above, which has already
+            # committed. A failure here must never flip a succeeded job to failed, so it is
+            # logged to worker.log and swallowed instead of re-raised.
+            if claim.analysis_profile == 'full':
+                try:
+                    if self.extended_pipeline is None:
+                        from app.services.pipeline import run_extended_zone_pipeline
+                        extended = run_extended_zone_pipeline
+                    else:
+                        extended = self.extended_pipeline
+                    extended_paths = extended(str(source),str(detections),zones,str(out/'extended'),
+                                              pixels_per_meter=self.pixels_per_meter)
+                    extended_paths = {kind:Path(path).resolve() for kind,path in extended_paths.items()}
+                    with self.sessions() as db:
+                        extended_storage.store_extended_result(db,claim.job_id,extended_paths,
+                                                                pixels_per_meter=self.pixels_per_meter)
+                except Exception as exc:
+                    with (out/'worker.log').open('a',encoding='utf-8') as log:
+                        log.write(f'EXTENDED_PIPELINE_FAILED ({type(exc).__name__}): {exc}\n')
             return {'job_id':str(claim.job_id),'status':'succeeded','analysis_profile':claim.analysis_profile,'output_dir':str(out)}
         except (Exception,KeyboardInterrupt) as exc:
             # Never put arbitrary exception strings/DB parameters in public state.
@@ -352,17 +377,22 @@ def main():
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--job-id',type=UUID,help='With --once, process/recover only this job')
     parser.add_argument('--poll-seconds',type=float,default=5)
+    parser.add_argument('--pixels-per-meter',type=float,default=None,
+                        help='Camera calibration for extended crowd-speed metrics (m/s); omit to skip speed conversion')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
     if args.imgsz <= 0 or args.imgsz % 32:
         parser.error('imgsz must be a positive multiple of 32')
+    if args.pixels_per_meter is not None and args.pixels_per_meter <= 0:
+        parser.error('pixels-per-meter must be positive')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
-                  scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz)
+                  scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
+                  pixels_per_meter=args.pixels_per_meter)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)
