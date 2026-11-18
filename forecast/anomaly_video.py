@@ -14,6 +14,7 @@ import numpy as np, pandas as pd
 from sklearn.ensemble import IsolationForest
 
 GROWTH_THR, MOTION_DROP_THR, MIN_DURATION_S, LOOKBACK_S, MIN_INCREASE = 0.30, 0.50, 3, 5, 3.0  # 제안값: 샘플 검증 후 튜닝
+MIN_COUNT_STALL = 3.0  # 정체 경보는 구역에 이만큼 이상 있을 때만(빈 구역은 이동량 0이라 정체로 오인)
 WINDOW_S, CONTAMINATION, RANDOM_STATE = 10, 0.05, 0  # 명세서 제안: contamination 0.05
 IF_FEATURES = ["count_delta", "motion", "reverse_ratio", "dwell"]
 
@@ -38,7 +39,7 @@ def _events(mask, sec, min_len):
 
 
 def rule_events(ts, job_id="sample", base_time="2026-01-01 00:00:00+09:00", growth_thr=GROWTH_THR,
-                motion_drop_thr=MOTION_DROP_THR, min_duration_s=MIN_DURATION_S, lookback_s=LOOKBACK_S, min_increase=MIN_INCREASE) -> pd.DataFrame:
+                motion_drop_thr=MOTION_DROP_THR, min_duration_s=MIN_DURATION_S, lookback_s=LOOKBACK_S, min_increase=MIN_INCREASE, min_count_stall=MIN_COUNT_STALL) -> pd.DataFrame:
     """FR-ANO-01: 인원 급증(최근 lookback초 전 대비 증가율 >= growth_thr) 또는 정체(이동량이 최근 평균 대비
     motion_drop_thr 이상 감소)가 min_duration_s초 이상 이어지면 이벤트. 과거 값만 쓴다(미래 미사용).
     급증은 증가 인원이 min_increase명 이상일 때만 센다(2명 -> 5명처럼 인원이 적을 때 비율만 튀는 것을 막음)."""
@@ -48,7 +49,7 @@ def rule_events(ts, job_id="sample", base_time="2026-01-01 00:00:00+09:00", grow
         prev = pd.Series(cnt).shift(lookback_s).to_numpy()
         growth = np.where(cnt - prev >= min_increase, (cnt - prev) / np.maximum(prev, 1.0), np.nan)
         base_m = pd.Series(mot).shift(1).rolling(lookback_s, min_periods=lookback_s).mean().to_numpy()
-        drop = 1 - mot / np.where(base_m > 0, base_m, np.nan)
+        drop = np.where(cnt >= min_count_stall, 1 - mot / np.where(base_m > 0, base_m, np.nan), np.nan)
         for kind, val, thr in (("surge", growth, growth_thr), ("stall", drop, motion_drop_thr)):
             for a, b in _events(np.nan_to_num(val, nan=-np.inf) >= thr, sec, min_duration_s):
                 peak = float(np.nanmax(val[a:b + 1]))

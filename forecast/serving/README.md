@@ -4,37 +4,76 @@
 |---|---|---|
 | 함수 | `run_video_forecast(폴더)` | `run_forecast(CSV)` |
 | 입력 | 영상 추출 결과(`crowd_observations.csv`, `flow.csv`) | 서울 생활인구 행정동 CSV |
-| 출력 | 구역별 **N초 뒤 인원** 예측 + 이상 흐름 이벤트 | 행정동별 **1시간 뒤 인구** 예측 |
-| 학습 | 미리 학습된 모델 없음. 학습이 필요한 모델은 **들어온 영상의 앞 60%로 그 자리에서 학습** | 학습된 모델 사용(재학습 없음) |
+| 출력 | 구역별 **10·30·60초 뒤 인원** 예측 + 이상 흐름 **3단계(낮음/주의/높음)** | 행정동별 **1시간 뒤 인구** 예측 |
+| 학습 | 쌓인 영상 CSV로 **오프라인 미리 학습**(`forecast/training/train_video.py`) → 서비스는 바로 예측. 모델 파일이 없으면 영상 안에서 즉석 학습하는 모델로 대체 | 학습된 모델 사용(재학습 없음) |
 
-## A. 영상 분석 CSV → 전처리 → 단기 예측 + 이상 흐름 탐지
+## A. 영상 분석 CSV → 전처리 → 단기 예측 + 이상 흐름 3단계
 ```python
 from forecast.serving import run_video_forecast
-res = run_video_forecast("분석결과폴더", horizon_s=10, base_time="2026-10-31 21:00")   # 폴더 또는 crowd_observations.csv 경로
+res = run_video_forecast("분석결과폴더", horizons=(10, 30, 60), base_time="2026-10-31 21:00",
+                         detections_csv="track/xxx_detections.csv", zones=zones, fps=24)   # 뒤 셋은 역방향·체류 특징용(없어도 동작)
 res["forecast_path"]   # 폴더/forecast_video.csv
-res["anomaly_path"]    # 폴더/anomaly_events.csv (명세서 anomaly_events 형식)
-res["info"]            # 영상 길이, 구역, 백테스트 MAE, 모델별 status, Isolation Forest 실행 여부
+res["anomaly_path"]    # 폴더/anomaly_events.csv (단계 이벤트 + 규칙 + Isolation Forest, 명세서 anomaly_events 형식 확장)
+res["timeline_path"]   # 폴더/anomaly_timeline.csv (구역별 매초 단계와 신호)
+res["info"]            # 영상 길이, 예측 시간·모델별 MAE와 직전값 대비 개선율, 단계별 초 수, IF·병목 반영 여부
 ```
-CLI: `python -m forecast.serving.video_pipeline 분석결과폴더 --horizon 10 --base-time "2026-10-31 21:00"`
+CLI: `python -m forecast.serving.video_pipeline 분석결과폴더 --horizons 10 30 60 --target mean10 --base-time "2026-10-31 21:00"`
 
-- 입력은 팀 영상 파이프라인(`backend/app/services/pipeline.py`의 `run_zone_pipeline`)이 저장하는 폴더 그대로. `flow.csv`가 없으면 이동량 없이 진행하고 Isolation Forest는 건너뛴다.
-- 전처리: 구역별로 1초 간격으로 맞추고, 인원·이동량은 2초 이하 빈칸만 보간, 유입·유출 빈칸은 0.
-- 모델: `persistence`(직전 값, 기준선) · `moving_avg_5s` · `ridge_ar`(학습 행 20개 이상) · `lightgbm`(학습 행 200개 이상 ≈ 4분 이상 영상). 모자라면 `insufficient_history`.
-- 이상 흐름: 규칙 기반 경보 + Isolation Forest(구역별 윈도우 30개 이상일 때, 명세서 TC-ANO-04).
-- **한계:** 1분 영상은 백테스트가 구역당 15개 남짓이라 MAE는 참고용이다. 1시간 뒤 같은 긴 예측은 같은 카메라의 며칠 분량 연속 영상과 별도 학습이 필요하다.
+- 입력은 팀 영상 파이프라인(`run_zone_pipeline`)이 저장하는 폴더 그대로(`crowd_observations.csv` 필수, `flow.csv`·`bottleneck_scores.csv`·`individual_directions.csv`는 있으면 사용).
+- **예측 대상(`target`):** 기본 `mean10` = 10초 평균 인원(탐지 잡음을 줄인 값, 명세서 `crowd_obs_10s`와 같은 집계). `raw` = 1초 원시 인원.
+- **모델(걷기식, 매초 그 시각까지의 영상만 사용):** `persistence`(지금 값, 기준선) · `moving_avg_5s` · `ridge_ar`(최근 변화 + 유입·유출 + 다른 구역 유입, 강한 규제, 학습 행 30개 이상) · `lightgbm`(+ 다른 구역 인원 변화·이동량·역방향·체류, 30초마다 재학습, 학습 행 200개 이상 ≈ 4분 이상 영상).
+- **미리 학습 모델(쌓인 영상으로 학습, 첫 초부터 예측):** `lightgbm_pre`(표 특징, 예측 시간별 1개) · `lstm_pre`(최근 60초 시퀀스, 10·30·60초를 한 모델로). 모델 파일이 없거나 그 예측 시간을 학습하지 않았으면 `status=no_pretrained_model`이고 나머지 모델은 그대로 동작한다. `pre_dir`(CLI `--pre-dir`)로 모델 폴더 지정, 기본 `artifacts/video/`.
+- **기준선:** 생활인구는 Seasonal Naive(지난주 같은 시각)지만, 1초 단위 짧은 영상에는 요일·시각 주기가 없어 **Naive(`persistence`, 지금 값 그대로)** 를 기준선으로 쓴다.
+- **평가:** `info["backtest"]`에 예측 시간·모델별 MAE·RMSE와 **직전값 대비 개선율**(skill = 1 − MAE/MAE(persistence), 0보다 크면 직전값보다 나음).
+- **SHAP:** `lightgbm_pre` 행의 `shap_top` = 그 예측에 크게 기여한 특징 3개(LightGBM 내장 TreeSHAP, 사람 수 단위. 예: `d1 +2.61명, motion5 +2.41명, d2 +2.23명`). 변수 기여도 해석이며 원인을 뜻하지 않는다.
+
+### 영상 모델 학습 (오프라인, `forecast/training/train_video.py`)
+서비스는 예측만 하고, 학습은 영상 분석 결과가 쌓이면 따로 돌린다(서비스 요청 안에서 돌리지 않음).
+```
+python -m forecast.training.train_video 결과폴더들의_상위폴더 --horizons 10 30 60
+```
+1. **수집·전처리:** 하위 폴더의 `crowd_observations.csv`(+`flow.csv`)를 모두 찾아 서비스와 같은 `load_video_series`로 전처리. 형식이 틀린 폴더는 건너뛰고 `skipped_folders`에 남긴다.
+2. **특징:** 서비스와 같은 `pre_design`. 카메라마다 인원 규모가 달라 "그 구역 지금까지 평균 인원"으로 나눈 비율로 학습한다(모든 카메라 공용 모델 1개).
+3. **비교·평가:** 영상 단위로 나눠(GroupKFold) **처음 보는 영상**에서 Naive·LightGBM·LSTM의 MAE·RMSE·skill → `compare_video.csv`. 같은 영상을 앞뒤로 나누면 결과가 부풀려지므로 쓰지 않는다.
+4. **SHAP:** 특징별 평균 기여(사람 수) → `manifest.json`의 `shap_importance`, `shap_importance.png`.
+5. **교체:** LightGBM은 예측 시간별 skill > 0, LSTM은 평균 skill > 0일 때만 교체(`--force` 예외). 이전 파일은 `history/<이전 버전>/`에 보관. 서버는 파일 수정 시각을 보고 새 모델을 다시 읽으므로 재시작이 필요 없다.
+- 최소 조건: 영상 2개, 학습 행 500개. LSTM은 GPU가 있으면 GPU, 없으면 CPU.
+
+### 이상 흐름 3단계 (`forecast/anomaly_levels.py`)
+구역별 매초 신호를 모아 단계를 정한다. 기준값은 **제안값**이며 혼잡·한산 라벨 구간이 생기면 튜닝한다.
+
+| 단계 | 조건 (하나라도 해당) |
+|---|---|
+| **높음** | 병목 점수 ≥ 70 / 규칙 경보와 Isolation Forest 이상이 동시에 / "주의"가 20초 이상 연속 |
+| **주의** | 병목 점수 40~70 / 규칙 경보(급증·정체) / Isolation Forest 점수 ≥ 0.8 |
+| **낮음** | 그 외 |
+
+- 흔들림 방지: 3초 이상 유지돼야 올리고, 5초 이상 풀려야 내린다. 병목 점수 기준은 팀 FR-ZON-05(40·70)와 같다.
+- 규칙 경보: 급증 = 5초 전 대비 +30% 이상이면서 3명 이상 증가, 정체 = 이동량이 최근 5초 평균보다 50% 이상 감소(구역에 3명 이상 있을 때만). 3초 이상 이어질 때.
+- Isolation Forest 특징 4개(명세서 MDL-08): `count_delta`, `motion`, `reverse_ratio`(구역 최근 10초 주 방향과 90° 넘게 다른 사람 비율), `dwell`(초당 몸 높이 0.1배 미만으로 거의 서 있는 사람 비율). 속도는 박스 높이로 나눠 카메라·fps와 무관하게 비교한다.
+- 이벤트(`method=level`)마다 `level`(최고 단계), `duration_s`, `peak_sec`, `reason`(근거 문장 예: "5초 전 대비 인원 +4.6명(+57%) · 이동량 -88% · 정체 경보 + 급증 경보"), `features`(평소 대비 편차 z, 화면의 기여 막대용).
+- 역방향·체류는 그 구역 평소보다 눈에 띄게 높을 때만 근거 문장에 넣는다(양방향 통행에서는 평소에도 역방향이 30~40%).
+- 표현 규칙(FR-ANO-03): 참고 지표이며 "사고 확정", "위험 판정" 같은 표현은 쓰지 않는다.
 
 결과 `forecast_video.csv` (UTF-8 BOM)
 | 컬럼 | 타입 | 설명 |
 |---|---|---|
 | `zone_id` | 문자열 | 구역 이름(ROI) |
-| `model` | 문자열 | `persistence` / `moving_avg_5s` / `ridge_ar` / `lightgbm` |
-| `split` | 문자열 | `backtest`(영상 뒤 40%에서 실제와 비교) / `forecast`(마지막 시각 + N초, 실제 없음) |
-| `last_observed_sec`, `target_sec` | 정수(초) | 영상 기준 마지막 관측 시각, 예측 대상 시각 |
+| `model` | 문자열 | `persistence` / `moving_avg_5s` / `ridge_ar` / `lightgbm` / `lightgbm_pre` / `lstm_pre` |
+| `horizon_s` | 정수 | 몇 초 뒤 예측인지(10·30·60) |
+| `target` | 문자열 | `mean10`(10초 평균 인원) / `raw` |
+| `split` | 문자열 | `backtest`(실제와 비교) / `forecast`(영상 끝 + N초, 실제 없음) |
+| `last_observed_sec`, `target_sec` | 정수(초) | 예측을 낸 시각, 예측 대상 시각 |
 | `last_observed_at`, `target_at` | 시각 ISO 8601 | `base_time`(촬영 시작 시각)을 주면 채움 |
-| `value`, `actual` | 실수(명) | 예측값, 실제 인원(backtest만) |
-| `status` | 문자열 | `ok` / `insufficient_history` / `gap_in_history` |
+| `value`, `actual` | 실수(명) | 예측값, 실제(backtest만) |
+| `status` | 문자열 | `ok` / `insufficient_history` / `gap_in_history` / `no_pretrained_model` |
+| `shap_top` | 문자열 | `lightgbm_pre` 행만: 상위 기여 특징 3개와 기여(명). 다른 모델은 빈칸 |
 
-검증: `python -m forecast.serving.test_video_pipeline` (스키마, 미래 값 누수 없음, 10분 합성 데이터로 LightGBM 학습, Isolation Forest 윈도우 29/30 경계, 짧은 영상, 잘못된 CSV)
+`anomaly_timeline.csv`: `zone_id, sec, level, level_num, candidate, count, count_delta_5s, motion_drop, reverse_ratio, dwell, rule_kind, rule_strength, if_score, if_anomaly, bottleneck_score`
+
+검증: `python -m forecast.serving.test_video_pipeline` (스키마, 미래 값 누수 없음(원시·10초 평균), 10분 합성 데이터 LightGBM, IF 윈도우 29/30, 단계 경계(병목 39/40/69/70), 흔들림 방지, 급증 주입 시 단계 상승, 근거 문장, 금지 표현, 타임라인 생성, 미리 학습: 영상 1개 거부·잘못된 폴더 건너뜀·비교표·SHAP 합 = 예측·처음 보는 영상에서 첫 초부터 예측·두 모델 누수 없음·모델 없음 표시·이전 버전 보관). Windows 콘솔에서는 `PYTHONIOENCODING=utf-8`을 켜고 실행
+
+**한계:** 1분 남짓 영상은 비교 시점이 적어 예측 수치는 참고용이다(두 공개·팀 영상에서 학습 모델이 직전값을 확실히 이기지 못함). 예측을 개선하려면 같은 카메라의 긴 연속 영상 여러 개로 미리 학습하는 단계가 필요하다(계획 문서 참고).
 
 ---
 
