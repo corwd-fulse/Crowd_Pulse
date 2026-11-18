@@ -37,5 +37,9 @@ class VisionExtendedResult(Base):
     queue_scores: Mapped[list] = mapped_column(JSONB)
     density_heatmap: Mapped[list] = mapped_column(JSONB)
     tracking_quality: Mapped[dict] = mapped_column(JSONB)
-    crowd_speed_zone: Mapped[list | None] = mapped_column(JSONB)
-    crowd_speed_individual: Mapped[list | None] = mapped_column(JSONB)
+    # none_as_null=True: SQLAlchemy의 JSON(B) 타입은 기본값(False)이면 Python None을 SQL NULL이
+    # 아니라 JSON 리터럴 null로 저장한다 — 그러면 "crowd_speed_zone IS NULL" 체크 제약이
+    # (의도와 달리) 항상 거짓이 되어 위 ck_vision_extended_speed_requires_calibration이
+    # pixels_per_meter=None인 정상 케이스에서도 위반된다(실제 DB로 테스트하다 발견한 버그).
+    crowd_speed_zone: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
+    crowd_speed_individual: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
