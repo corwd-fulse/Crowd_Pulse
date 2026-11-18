@@ -3,7 +3,10 @@ import json
 
 import cv2
 import numpy as np
+import pandas as pd
+import pytest
 
+from app.services import pipeline as pipeline_module
 from app.services.pipeline import run_extended_zone_pipeline
 from app.services.vision_csv import SCHEMAS
 from app.services.zone_analysis import Zone
@@ -57,3 +60,32 @@ def test_extended_pipeline_adds_speed_files_only_with_calibration(tmp_path):
 
     assert "crowd_speed_zone" in paths
     assert "crowd_speed_individual" in paths
+
+
+def test_extended_pipeline_reuses_precomputed_frames_without_recomputing(tmp_path, monkeypatch):
+    # worker.py가 핵심 파이프라인 결과(zone_timeseries/motion_timeseries/individual_directions)를
+    # 넘겨주면, 이 함수는 (특히 Optical Flow처럼) 그걸 다시 계산하면 안 된다 — 장시간 영상에서
+    # 제일 비싼 연산을 두 번 돌리게 되는 회귀를 막는 테스트.
+    video_path = tmp_path / "v.mp4"
+    _write_video(video_path)
+    zone = Zone("A", [(0, 0), (120, 0), (120, 120), (0, 120)])
+    rows = [[f, f * 100, 1, 10 + f, 10, 20 + f, 20, 0.9] for f in range(10)]
+    det_path = tmp_path / "det.csv"
+    _write_detections(det_path, rows)
+
+    def boom(*a, **k):
+        raise AssertionError("recomputed a value that was already supplied")
+
+    monkeypatch.setattr(pipeline_module, "compute_zone_motion", boom)
+    monkeypatch.setattr(pipeline_module, "compute_individual_directions", boom)
+    monkeypatch.setattr(pipeline_module, "compute_zone_timeseries", boom)
+
+    zone_ts = pd.DataFrame([{"sec": 0, "zone": "A", "count": 1.0, "inflow": 0, "outflow": 0}])
+    motion_ts = pd.DataFrame([{"sec": 0, "zone": "A", "angle_deg": 0.0, "magnitude_px": 1.0, "motion": 1.0, "low_confidence": False}])
+    individual = pd.DataFrame(columns=["frame", "t_ms", "track_id", "angle_deg", "speed_px", "reliable"])
+
+    paths = run_extended_zone_pipeline(
+        str(video_path), str(det_path), [zone], str(tmp_path / "out"),
+        zone_timeseries=zone_ts, motion_timeseries=motion_ts, individual_directions=individual,
+    )
+    assert set(paths) == {"dwell_times", "counter_flow", "queue_scores", "density_heatmap", "tracking_quality"}

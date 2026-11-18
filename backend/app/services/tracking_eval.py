@@ -27,7 +27,22 @@ def evaluate_tracking(detections_csv: str) -> dict:
             "suspected_id_switch_ratio": 0.0,
         }
 
+    # groupby("track_id")는 track_id가 전부 비어있는(None/NaN) 경우 기본적으로 그 그룹 자체를
+    # 버려서 lengths가 빈 Series가 된다 — 사람은 탐지됐지만 추적 ID가 하나도 안 붙은 영상
+    # (track_video가 실패했거나 추적 없이 탐지만 한 입력). 트랙이 0개면 "이 추적이 얼마나
+    # 안정적이었는지" 자체를 말할 수 없으니, 탐지는 있었다는 것만 신뢰도 통계로 남기고
+    # 트랙 관련 값은 0으로 둔다(suspect_tracks/lengths.shape[0]에서 ZeroDivisionError 방지).
     lengths = det.groupby("track_id").size()
+    if lengths.empty:
+        return {
+            "track_count": 0,
+            "mean_track_length_frames": 0.0,
+            "median_track_length_frames": 0.0,
+            "mean_confidence": round(float(det.conf.mean()), 3),
+            "min_confidence": round(float(det.conf.min()), 3),
+            "suspected_id_switch_ratio": 0.0,
+        }
+
     suspect_tracks = 0
     for _track_id, g in det.sort_values("frame").groupby("track_id"):
         points = list(zip(((g.x1 + g.x2) / 2).tolist(), g.y2.tolist()))

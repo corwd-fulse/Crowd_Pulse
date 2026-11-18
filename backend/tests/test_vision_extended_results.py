@@ -32,6 +32,16 @@ def _extended_paths(tmp_path, overrides=None):
     return paths
 
 
+def test_dict_calibration_is_rejected_before_touching_db(tmp_path):
+    # pixels_per_meter은 Float 컬럼 하나뿐이라 구역별 dict 보정값은 DB에 못 담는다.
+    # DB에 닿기 전에 걸러져야 하므로 db=None으로도 테스트할 수 있다.
+    paths = _extended_paths(tmp_path, {
+        'crowd_speed_zone': 'sec,zone,speed_mps,low_confidence\n0,near,1.2,False\n',
+    })
+    with pytest.raises(InvalidExtendedResult):
+        extended_storage.store_extended_result(None, None, paths, pixels_per_meter={'near': 50.0})
+
+
 @pytest.mark.integration
 def test_extended_result_requires_core_result_first(db, seeded, tmp_path):
     paths = _extended_paths(tmp_path)

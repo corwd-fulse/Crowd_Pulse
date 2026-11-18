@@ -13,7 +13,7 @@ import hashlib
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 Nonnegative = Annotated[float, Field(ge=0)]
 Unit = Annotated[float, Field(ge=0, le=1)]
@@ -60,6 +60,15 @@ class DwellTime(_Row):
     enter_sec: Annotated[int, Field(ge=0)]
     exit_sec: Annotated[int, Field(ge=0)]
     dwell_s: Nonnegative
+
+    @model_validator(mode='after')
+    def ordered_times(self):
+        # dwell_s는 프레임 단위 정밀 계산이고 enter_sec/exit_sec는 그 초 단위로 내림한 값이라
+        # dwell_s == exit_sec - enter_sec가 정확히 맞아야 하는 건 아니다(둘 다 같은 체류를
+        # 다른 정밀도로 표현한 값). 그래도 순서가 뒤집히는 것(exit < enter)은 항상 데이터 오류다.
+        if self.exit_sec < self.enter_sec:
+            raise ValueError('exit_sec precedes enter_sec')
+        return self
 
 
 class CounterFlow(_Row):

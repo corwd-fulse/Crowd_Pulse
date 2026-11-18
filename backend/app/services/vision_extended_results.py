@@ -30,6 +30,11 @@ def store_extended_result(
     has_speed = 'crowd_speed_zone' in records
     if has_speed != (pixels_per_meter is not None):
         raise InvalidExtendedResult('crowd_speed_zone file requires pixels_per_meter and vice versa')
+    # crowd_speed.py/pipeline.py allow a per-zone dict calibration, but this table's
+    # pixels_per_meter column is a single Float — a dict here would only fail later with a
+    # confusing driver-level type error, so reject it clearly up front.
+    if pixels_per_meter is not None and not isinstance(pixels_per_meter, (int, float)):
+        raise InvalidExtendedResult('Only a single pixels_per_meter value is stored; per-zone calibration is CSV-only for now')
 
     result = db.get(VisionResult, job_id)
     if result is None:

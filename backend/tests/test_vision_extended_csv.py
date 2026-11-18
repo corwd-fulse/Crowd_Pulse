@@ -55,6 +55,12 @@ def test_out_of_range_ratio_is_rejected(tmp_path):
         validate_extended_bundle(paths)
 
 
+def test_exit_before_enter_is_rejected(tmp_path):
+    paths = _write(tmp_path, {'dwell_times': 'track_id,zone,enter_sec,exit_sec,dwell_s\n1,near,5,2,2.0\n'})
+    with pytest.raises(InvalidExtendedResult):
+        validate_extended_bundle(paths)
+
+
 def test_speed_files_are_accepted_when_present(tmp_path):
     paths = _write(tmp_path, {
         'crowd_speed_zone': 'sec,zone,speed_mps,low_confidence\n0,near,1.2,False\n',

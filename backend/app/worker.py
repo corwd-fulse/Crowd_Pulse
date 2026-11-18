@@ -17,6 +17,7 @@ import threading
 import time
 from uuid import UUID, uuid4
 
+import pandas as pd
 from sqlalchemy import select, text
 from sqlalchemy.orm import sessionmaker
 
@@ -75,7 +76,7 @@ def video_info(path):
 class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
-                 extended_pipeline=None, pixels_per_meter=None,
+                 extended_pipeline=None, pixels_per_meter=None, enable_extended=False,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
@@ -93,6 +94,10 @@ class Worker:
         self.pipeline = pipeline
         self.extended_pipeline = extended_pipeline
         self.pixels_per_meter = pixels_per_meter
+        # Opt-in: existing callers/tests that don't know about the extended pipeline must see
+        # byte-for-byte the same behavior as before it existed. Only --enable-extended-analysis
+        # (or passing enable_extended=True directly) turns this on.
+        self.enable_extended = enable_extended
         self.inspect_video = inspect_video
         self.heartbeat_seconds = heartbeat_seconds
         # Isolated tests and explicit --once --job-id checks restrict queue scope.
@@ -337,16 +342,25 @@ class Worker:
             # Extended metrics (dwell/counter-flow/queue/heatmap/tracking-quality) are a
             # best-effort bonus on top of the core FR-ZON result above, which has already
             # committed. A failure here must never flip a succeeded job to failed, so it is
-            # logged to worker.log and swallowed instead of re-raised.
-            if claim.analysis_profile == 'full':
+            # logged to worker.log and swallowed instead of re-raised. Opt-in only
+            # (self.enable_extended) so every existing caller/test keeps its exact prior
+            # behavior unless it asks for this.
+            if claim.analysis_profile == 'full' and self.enable_extended:
                 try:
                     if self.extended_pipeline is None:
                         from app.services.pipeline import run_extended_zone_pipeline
                         extended = run_extended_zone_pipeline
                     else:
                         extended = self.extended_pipeline
-                    extended_paths = extended(str(source),str(detections),zones,str(out/'extended'),
-                                              pixels_per_meter=self.pixels_per_meter)
+                    # Reuse what run_zone_pipeline() already computed instead of re-running
+                    # Optical Flow (the most expensive step) a second time over the whole video.
+                    extended_paths = extended(
+                        str(source),str(detections),zones,str(out/'extended'),
+                        pixels_per_meter=self.pixels_per_meter,
+                        zone_timeseries=pd.read_csv(paths['crowd_observations']),
+                        motion_timeseries=pd.read_csv(paths['flow']),
+                        individual_directions=pd.read_csv(paths['individual_directions']),
+                    )
                     extended_paths = {kind:Path(path).resolve() for kind,path in extended_paths.items()}
                     with self.sessions() as db:
                         extended_storage.store_extended_result(db,claim.job_id,extended_paths,
@@ -379,6 +393,8 @@ def main():
     parser.add_argument('--poll-seconds',type=float,default=5)
     parser.add_argument('--pixels-per-meter',type=float,default=None,
                         help='Camera calibration for extended crowd-speed metrics (m/s); omit to skip speed conversion')
+    parser.add_argument('--enable-extended-analysis',action='store_true',
+                        help='Also compute and store dwell/counter-flow/queue/heatmap/tracking-quality metrics (FULL profile only)')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
@@ -386,13 +402,15 @@ def main():
         parser.error('imgsz must be a positive multiple of 32')
     if args.pixels_per_meter is not None and args.pixels_per_meter <= 0:
         parser.error('pixels-per-meter must be positive')
+    if args.pixels_per_meter is not None and not args.enable_extended_analysis:
+        parser.error('pixels-per-meter has no effect without --enable-extended-analysis')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
                   scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
-                  pixels_per_meter=args.pixels_per_meter)
+                  pixels_per_meter=args.pixels_per_meter,enable_extended=args.enable_extended_analysis)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)
