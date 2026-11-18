@@ -1,0 +1,2609 @@
+{
+  "version": "observed-zone-transitions-v1",
+  "analysis_job_id": "ab1ac739-e34c-41ea-a1c0-feea10e9e473",
+  "video_id": "dd4b6f82-cde5-42b6-8fd0-f540d8e02a71",
+  "fps": 25.0,
+  "frame_count": 404,
+  "video_resolution": [
+    1920,
+    1080
+  ],
+  "roi_snapshot": {
+    "approved_for_analysis": false,
+    "coordinate_system": "Original image pixels; origin top-left; x right, y down. Polygons describe ground regions; person assignment uses bbox bottom-center.",
+    "description": "Unvalidated manually selected ROI candidates for the supplied outdoor walkway video only. Do not automatically apply to other footage.",
+    "reviewed_frame_indices": [
+      0,
+      101,
+      202,
+      303,
+      403
+    ],
+    "reviewed_frame_times_seconds": [
+      0,
+      4.04,
+      8.08,
+      12.12,
+      16.12
+    ],
+    "source_fps": 25,
+    "source_frame_count": 404,
+    "source_sha256": "a7ce34df58643e9a7cdba79ec4597dd3edadbca1f9cb25673efe2770c86e5b1b",
+    "source_video": "uploads/videos/81accb3dd82e489cb47190578ead674e.mp4",
+    "status": "candidate_unvalidated",
+    "validation_notes": [
+      "Geometry checked only; sampled visual review does not establish validity across every frame.",
+      "Twenty-pixel unassigned gap between zones prevents shared boundaries; it can affect transition counts.",
+      "Only a conservative central subset of the walkway is covered, not the entire visible pedestrian area.",
+      "Pedestrians and carried objects can occlude the ground and affect optical flow.",
+      "Far/near are image-depth labels, not walking directions or physical entrances/exits.",
+      "No metric area calibration, detections or inference validation has been performed.",
+      "Existing Zone JSON loader reads zones only and does not enforce candidate status or source hash."
+    ],
+    "video_resolution": [
+      1920,
+      1080
+    ],
+    "zones": [
+      {
+        "description": "Candidate central walkway farther from camera; not an entrance/exit designation.",
+        "name": "walkway_far",
+        "polygon": [
+          [
+            900,
+            650
+          ],
+          [
+            1420,
+            650
+          ],
+          [
+            1400,
+            790
+          ],
+          [
+            720,
+            790
+          ]
+        ]
+      },
+      {
+        "description": "Candidate central walkway closer to camera; excludes side stairs and right seating/planters.",
+        "name": "walkway_near",
+        "polygon": [
+          [
+            700,
+            810
+          ],
+          [
+            1390,
+            810
+          ],
+          [
+            1340,
+            1000
+          ],
+          [
+            540,
+            1000
+          ]
+        ]
+      }
+    ]
+  },
+  "mode": "observed_replay_not_prediction",
+  "policy": {
+    "min_dwell_frames": 3,
+    "hysteresis_px": 3.0,
+    "min_displacement_px": 15.0,
+    "overlap": "ambiguous_unanalyzed",
+    "gap": "observed_outside",
+    "id_discontinuity": "split_without_linking",
+    "visibility": "display_only"
+  },
+  "frames": [
+    {
+      "frame": 23,
+      "t_ms": 920,
+      "points": [
+        {
+          "track_id": 2,
+          "x": 1051.55,
+          "y": 921.9,
+          "zone": "walkway_near",
+          "confidence": 0.844
+        },
+        {
+          "track_id": 5,
+          "x": 1666.4,
+          "y": 1072.8,
+          "zone": "",
+          "confidence": 0.681
+        },
+        {
+          "track_id": 10,
+          "x": 1864.95,
+          "y": 994.1,
+          "zone": "",
+          "confidence": 0.731
+        },
+        {
+          "track_id": 38,
+          "x": 458.45,
+          "y": 892.0,
+          "zone": "",
+          "confidence": 0.888
+        },
+        {
+          "track_id": 49,
+          "x": 721.7,
+          "y": 822.6,
+          "zone": "walkway_near",
+          "confidence": 0.882
+        },
+        {
+          "track_id": 4,
+          "x": 115.45,
+          "y": 1073.7,
+          "zone": "",
+          "confidence": 0.82
+        },
+        {
+          "track_id": 6,
+          "x": 1496.6,
+          "y": 652.1,
+          "zone": "",
+          "confidence": 0.694
+        },
+        {
+          "track_id": 60,
+          "x": 1552.1999999999998,
+          "y": 614.0,
+          "zone": "",
+          "confidence": 0.234
+        },
+        {
+          "track_id": 63,
+          "x": 1408.6,
+          "y": 684.0,
+          "zone": "walkway_far",
+          "confidence": 0.535
+        },
+        {
+          "track_id": 3,
+          "x": 1260.5,
+          "y": 830.4,
+          "zone": "walkway_near",
+          "confidence": 0.751
+        },
+        {
+          "track_id": 9,
+          "x": 1357.2,
+          "y": 724.3,
+          "zone": "walkway_far",
+          "confidence": 0.69
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 2,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 0,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 0
+        }
+      ]
+    },
+    {
+      "frame": 24,
+      "t_ms": 960,
+      "points": [
+        {
+          "track_id": 2,
+          "x": 1047.75,
+          "y": 918.7,
+          "zone": "walkway_near",
+          "confidence": 0.834
+        },
+        {
+          "track_id": 5,
+          "x": 1665.25,
+          "y": 1071.7,
+          "zone": "",
+          "confidence": 0.732
+        },
+        {
+          "track_id": 10,
+          "x": 1865.35,
+          "y": 989.4,
+          "zone": "",
+          "confidence": 0.709
+        },
+        {
+          "track_id": 38,
+          "x": 421.4,
+          "y": 911.4,
+          "zone": "",
+          "confidence": 0.915
+        },
+        {
+          "track_id": 49,
+          "x": 714.35,
+          "y": 825.9,
+          "zone": "walkway_near",
+          "confidence": 0.891
+        },
+        {
+          "track_id": 4,
+          "x": 115.19999999999999,
+          "y": 1072.6,
+          "zone": "",
+          "confidence": 0.842
+        },
+        {
+          "track_id": 6,
+          "x": 1490.95,
+          "y": 657.8,
+          "zone": "",
+          "confidence": 0.739
+        },
+        {
+          "track_id": 60,
+          "x": 1553.25,
+          "y": 617.3,
+          "zone": "",
+          "confidence": 0.542
+        },
+        {
+          "track_id": 3,
+          "x": 1247.15,
+          "y": 836.0,
+          "zone": "walkway_near",
+          "confidence": 0.867
+        },
+        {
+          "track_id": 9,
+          "x": 1356.0500000000002,
+          "y": 724.4,
+          "zone": "walkway_far",
+          "confidence": 0.76
+        },
+        {
+          "track_id": 80,
+          "x": 527.0,
+          "y": 798.3,
+          "zone": "",
+          "confidence": 0.787
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 1,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 0,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 0
+        }
+      ]
+    },
+    {
+      "frame": 49,
+      "t_ms": 1960,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1665.2,
+          "y": 1074.1,
+          "zone": "",
+          "confidence": 0.822
+        },
+        {
+          "track_id": 3,
+          "x": 738.5,
+          "y": 1017.9,
+          "zone": "",
+          "confidence": 0.86
+        },
+        {
+          "track_id": 48,
+          "x": 1233.6,
+          "y": 788.2,
+          "zone": "walkway_far",
+          "confidence": 0.799
+        },
+        {
+          "track_id": 129,
+          "x": 531.4,
+          "y": 997.6,
+          "zone": "",
+          "confidence": 0.886
+        },
+        {
+          "track_id": 4,
+          "x": 223.2,
+          "y": 1001.0,
+          "zone": "",
+          "confidence": 0.838
+        },
+        {
+          "track_id": 112,
+          "x": 1366.75,
+          "y": 685.4,
+          "zone": "walkway_far",
+          "confidence": 0.757
+        },
+        {
+          "track_id": 125,
+          "x": 1445.1,
+          "y": 670.7,
+          "zone": "",
+          "confidence": 0.678
+        },
+        {
+          "track_id": 97,
+          "x": 1542.45,
+          "y": 819.5,
+          "zone": "",
+          "confidence": 0.511
+        },
+        {
+          "track_id": 10,
+          "x": 1815.15,
+          "y": 890.8,
+          "zone": "",
+          "confidence": 0.848
+        },
+        {
+          "track_id": 9,
+          "x": 1312.5,
+          "y": 649.3,
+          "zone": "",
+          "confidence": 0.364
+        },
+        {
+          "track_id": 13,
+          "x": 1522.8,
+          "y": 627.5,
+          "zone": "",
+          "confidence": 0.652
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 2,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 0,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 0
+        }
+      ]
+    },
+    {
+      "frame": 50,
+      "t_ms": 2000,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1664.3,
+          "y": 1074.6,
+          "zone": "",
+          "confidence": 0.804
+        },
+        {
+          "track_id": 3,
+          "x": 678.35,
+          "y": 1030.8,
+          "zone": "",
+          "confidence": 0.781
+        },
+        {
+          "track_id": 48,
+          "x": 1243.0,
+          "y": 782.8,
+          "zone": "walkway_far",
+          "confidence": 0.819
+        },
+        {
+          "track_id": 129,
+          "x": 547.4,
+          "y": 992.2,
+          "zone": "walkway_near",
+          "confidence": 0.489
+        },
+        {
+          "track_id": 112,
+          "x": 1372.35,
+          "y": 671.1,
+          "zone": "walkway_far",
+          "confidence": 0.797
+        },
+        {
+          "track_id": 125,
+          "x": 1456.5500000000002,
+          "y": 668.5,
+          "zone": "",
+          "confidence": 0.704
+        },
+        {
+          "track_id": 97,
+          "x": 1540.9,
+          "y": 819.1,
+          "zone": "",
+          "confidence": 0.436
+        },
+        {
+          "track_id": 10,
+          "x": 1827.6,
+          "y": 880.0,
+          "zone": "",
+          "confidence": 0.884
+        },
+        {
+          "track_id": 141,
+          "x": 1411.3,
+          "y": 584.8,
+          "zone": "",
+          "confidence": 0.378
+        },
+        {
+          "track_id": 142,
+          "x": 1411.4,
+          "y": 513.5,
+          "zone": "",
+          "confidence": 0.391
+        },
+        {
+          "track_id": 9,
+          "x": 1328.45,
+          "y": 633.6,
+          "zone": "",
+          "confidence": 0.65
+        },
+        {
+          "track_id": 13,
+          "x": 1513.6999999999998,
+          "y": 641.4,
+          "zone": "",
+          "confidence": 0.697
+        },
+        {
+          "track_id": 1,
+          "x": 319.5,
+          "y": 976.5,
+          "zone": "",
+          "confidence": 0.865
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 2,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 0,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 1,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 1
+        }
+      ]
+    },
+    {
+      "frame": 51,
+      "t_ms": 2040,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1663.15,
+          "y": 1072.8,
+          "zone": "",
+          "confidence": 0.725
+        },
+        {
+          "track_id": 3,
+          "x": 613.15,
+          "y": 1038.4,
+          "zone": "",
+          "confidence": 0.849
+        },
+        {
+          "track_id": 48,
+          "x": 1254.8,
+          "y": 776.9,
+          "zone": "walkway_far",
+          "confidence": 0.823
+        },
+        {
+          "track_id": 112,
+          "x": 1387.7,
+          "y": 665.1,
+          "zone": "walkway_far",
+          "confidence": 0.801
+        },
+        {
+          "track_id": 10,
+          "x": 1825.6,
+          "y": 761.6,
+          "zone": "",
+          "confidence": 0.592
+        },
+        {
+          "track_id": 142,
+          "x": 1411.2,
+          "y": 514.5,
+          "zone": "",
+          "confidence": 0.377
+        },
+        {
+          "track_id": 13,
+          "x": 1516.65,
+          "y": 640.9,
+          "zone": "",
+          "confidence": 0.456
+        },
+        {
+          "track_id": 1,
+          "x": 365.85,
+          "y": 972.7,
+          "zone": "",
+          "confidence": 0.87
+        },
+        {
+          "track_id": 113,
+          "x": 1477.5,
+          "y": 661.8,
+          "zone": "",
+          "confidence": 0.648
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 2,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 0,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 1
+        }
+      ]
+    },
+    {
+      "frame": 52,
+      "t_ms": 2080,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1662.75,
+          "y": 1072.9,
+          "zone": "",
+          "confidence": 0.767
+        },
+        {
+          "track_id": 3,
+          "x": 509.1,
+          "y": 1049.5,
+          "zone": "",
+          "confidence": 0.881
+        },
+        {
+          "track_id": 48,
+          "x": 1262.5,
+          "y": 769.7,
+          "zone": "walkway_far",
+          "confidence": 0.79
+        },
+        {
+          "track_id": 112,
+          "x": 1405.25,
+          "y": 662.5,
+          "zone": "walkway_far",
+          "confidence": 0.831
+        },
+        {
+          "track_id": 142,
+          "x": 1414.15,
+          "y": 512.0,
+          "zone": "",
+          "confidence": 0.11
+        },
+        {
+          "track_id": 113,
+          "x": 1476.75,
+          "y": 663.2,
+          "zone": "",
+          "confidence": 0.674
+        },
+        {
+          "track_id": 90,
+          "x": 1154.9499999999998,
+          "y": 740.2,
+          "zone": "walkway_far",
+          "confidence": 0.785
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 2
+        }
+      ]
+    },
+    {
+      "frame": 199,
+      "t_ms": 7960,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1657.0500000000002,
+          "y": 1070.8,
+          "zone": "",
+          "confidence": 0.746
+        },
+        {
+          "track_id": 187,
+          "x": 1871.0500000000002,
+          "y": 944.4,
+          "zone": "",
+          "confidence": 0.581
+        },
+        {
+          "track_id": 232,
+          "x": 1044.55,
+          "y": 990.3,
+          "zone": "walkway_near",
+          "confidence": 0.637
+        },
+        {
+          "track_id": 589,
+          "x": 558.8,
+          "y": 956.1,
+          "zone": "",
+          "confidence": 0.851
+        },
+        {
+          "track_id": 189,
+          "x": 1240.9499999999998,
+          "y": 861.6,
+          "zone": "walkway_near",
+          "confidence": 0.661
+        },
+        {
+          "track_id": 495,
+          "x": 333.2,
+          "y": 874.8,
+          "zone": "",
+          "confidence": 0.835
+        },
+        {
+          "track_id": 343,
+          "x": 87.1,
+          "y": 1010.4,
+          "zone": "",
+          "confidence": 0.907
+        },
+        {
+          "track_id": 579,
+          "x": 1483.25,
+          "y": 825.7,
+          "zone": "",
+          "confidence": 0.621
+        },
+        {
+          "track_id": 435,
+          "x": 895.45,
+          "y": 1059.7,
+          "zone": "",
+          "confidence": 0.884
+        },
+        {
+          "track_id": 586,
+          "x": 1345.45,
+          "y": 912.8,
+          "zone": "walkway_near",
+          "confidence": 0.807
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 5,
+          "confirmed_outflow": 9
+        }
+      ]
+    },
+    {
+      "frame": 200,
+      "t_ms": 8000,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1661.85,
+          "y": 1064.2,
+          "zone": "",
+          "confidence": 0.704
+        },
+        {
+          "track_id": 187,
+          "x": 1869.7,
+          "y": 927.2,
+          "zone": "",
+          "confidence": 0.608
+        },
+        {
+          "track_id": 232,
+          "x": 1101.3,
+          "y": 954.4,
+          "zone": "walkway_near",
+          "confidence": 0.815
+        },
+        {
+          "track_id": 589,
+          "x": 599.05,
+          "y": 947.4,
+          "zone": "walkway_near",
+          "confidence": 0.855
+        },
+        {
+          "track_id": 189,
+          "x": 1244.75,
+          "y": 893.5,
+          "zone": "walkway_near",
+          "confidence": 0.863
+        },
+        {
+          "track_id": 495,
+          "x": 322.85,
+          "y": 880.4,
+          "zone": "",
+          "confidence": 0.487
+        },
+        {
+          "track_id": 343,
+          "x": 120.75,
+          "y": 991.4,
+          "zone": "",
+          "confidence": 0.937
+        },
+        {
+          "track_id": 579,
+          "x": 1524.2,
+          "y": 816.4,
+          "zone": "",
+          "confidence": 0.761
+        },
+        {
+          "track_id": 435,
+          "x": 850.9000000000001,
+          "y": 1079.9,
+          "zone": "",
+          "confidence": 0.846
+        },
+        {
+          "track_id": 586,
+          "x": 1387.75,
+          "y": 932.3,
+          "zone": "",
+          "confidence": 0.799
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 1
+        },
+        {
+          "zone": "walkway_near",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 5,
+          "confirmed_outflow": 9
+        }
+      ]
+    },
+    {
+      "frame": 252,
+      "t_ms": 10080,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1283.55,
+          "y": 1069.6,
+          "zone": "",
+          "confidence": 0.92
+        },
+        {
+          "track_id": 187,
+          "x": 1873.75,
+          "y": 1037.3,
+          "zone": "",
+          "confidence": 0.548
+        },
+        {
+          "track_id": 714,
+          "x": 1660.0500000000002,
+          "y": 1080.0,
+          "zone": "",
+          "confidence": 0.707
+        },
+        {
+          "track_id": 716,
+          "x": 792.45,
+          "y": 704.9,
+          "zone": "",
+          "confidence": 0.245
+        },
+        {
+          "track_id": 343,
+          "x": 348.65,
+          "y": 954.8,
+          "zone": "",
+          "confidence": 0.916
+        },
+        {
+          "track_id": 718,
+          "x": 1022.3499999999999,
+          "y": 855.9,
+          "zone": "walkway_near",
+          "confidence": 0.89
+        },
+        {
+          "track_id": 720,
+          "x": 87.94999999999999,
+          "y": 951.0,
+          "zone": "",
+          "confidence": 0.906
+        },
+        {
+          "track_id": 722,
+          "x": 1814.05,
+          "y": 742.2,
+          "zone": "",
+          "confidence": 0.739
+        },
+        {
+          "track_id": 477,
+          "x": 1525.45,
+          "y": 867.1,
+          "zone": "",
+          "confidence": 0.698
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 2
+        },
+        {
+          "zone": "walkway_near",
+          "count": 1,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 6,
+          "confirmed_outflow": 9
+        }
+      ]
+    },
+    {
+      "frame": 253,
+      "t_ms": 10120,
+      "points": [
+        {
+          "track_id": 5,
+          "x": 1222.25,
+          "y": 1069.2,
+          "zone": "",
+          "confidence": 0.908
+        },
+        {
+          "track_id": 714,
+          "x": 1666.35,
+          "y": 1079.7,
+          "zone": "",
+          "confidence": 0.701
+        },
+        {
+          "track_id": 716,
+          "x": 795.55,
+          "y": 702.0,
+          "zone": "",
+          "confidence": 0.336
+        },
+        {
+          "track_id": 343,
+          "x": 383.75,
+          "y": 948.8,
+          "zone": "",
+          "confidence": 0.914
+        },
+        {
+          "track_id": 718,
+          "x": 975.0,
+          "y": 873.7,
+          "zone": "walkway_near",
+          "confidence": 0.864
+        },
+        {
+          "track_id": 720,
+          "x": 119.4,
+          "y": 934.5,
+          "zone": "",
+          "confidence": 0.758
+        },
+        {
+          "track_id": 722,
+          "x": 1813.0,
+          "y": 740.4,
+          "zone": "",
+          "confidence": 0.681
+        },
+        {
+          "track_id": 477,
+          "x": 1546.4,
+          "y": 836.6,
+          "zone": "",
+          "confidence": 0.711
+        },
+        {
+          "track_id": 629,
+          "x": 1476.1,
+          "y": 783.1,
+          "zone": "",
+          "confidence": 0.559
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 3
+        },
+        {
+          "zone": "walkway_near",
+          "count": 1,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 7,
+          "confirmed_outflow": 9
+        }
+      ]
+    },
+    {
+      "frame": 299,
+      "t_ms": 11960,
+      "points": [
+        {
+          "track_id": 714,
+          "x": 1663.0500000000002,
+          "y": 1072.5,
+          "zone": "",
+          "confidence": 0.764
+        },
+        {
+          "track_id": 189,
+          "x": 1034.4,
+          "y": 758.1,
+          "zone": "walkway_far",
+          "confidence": 0.553
+        },
+        {
+          "track_id": 838,
+          "x": 526.6,
+          "y": 874.4,
+          "zone": "",
+          "confidence": 0.843
+        },
+        {
+          "track_id": 802,
+          "x": 1243.85,
+          "y": 768.2,
+          "zone": "walkway_far",
+          "confidence": 0.472
+        },
+        {
+          "track_id": 730,
+          "x": 1120.75,
+          "y": 851.4,
+          "zone": "walkway_near",
+          "confidence": 0.746
+        },
+        {
+          "track_id": 718,
+          "x": 723.65,
+          "y": 878.8,
+          "zone": "walkway_near",
+          "confidence": 0.739
+        },
+        {
+          "track_id": 869,
+          "x": 903.6,
+          "y": 850.8,
+          "zone": "walkway_near",
+          "confidence": 0.691
+        },
+        {
+          "track_id": 720,
+          "x": 265.2,
+          "y": 888.6,
+          "zone": "",
+          "confidence": 0.785
+        },
+        {
+          "track_id": 435,
+          "x": 1576.5,
+          "y": 771.6,
+          "zone": "",
+          "confidence": 0.306
+        },
+        {
+          "track_id": 874,
+          "x": 354.65,
+          "y": 811.8,
+          "zone": "",
+          "confidence": 0.735
+        },
+        {
+          "track_id": 876,
+          "x": 1461.8,
+          "y": 657.9,
+          "zone": "",
+          "confidence": 0.566
+        },
+        {
+          "track_id": 590,
+          "x": 1362.85,
+          "y": 712.0,
+          "zone": "walkway_far",
+          "confidence": 0.601
+        },
+        {
+          "track_id": 673,
+          "x": 805.25,
+          "y": 858.0,
+          "zone": "walkway_near",
+          "confidence": 0.741
+        },
+        {
+          "track_id": 343,
+          "x": 1851.0,
+          "y": 699.3,
+          "zone": "",
+          "confidence": 0.743
+        },
+        {
+          "track_id": 734,
+          "x": 651.8499999999999,
+          "y": 805.1,
+          "zone": "",
+          "confidence": 0.634
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 3,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 3
+        },
+        {
+          "zone": "walkway_near",
+          "count": 4,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 8,
+          "confirmed_outflow": 11
+        }
+      ]
+    },
+    {
+      "frame": 300,
+      "t_ms": 12000,
+      "points": [
+        {
+          "track_id": 714,
+          "x": 1666.45,
+          "y": 1069.3,
+          "zone": "",
+          "confidence": 0.761
+        },
+        {
+          "track_id": 189,
+          "x": 1037.5,
+          "y": 739.5,
+          "zone": "walkway_far",
+          "confidence": 0.166
+        },
+        {
+          "track_id": 838,
+          "x": 556.3,
+          "y": 864.3,
+          "zone": "",
+          "confidence": 0.863
+        },
+        {
+          "track_id": 802,
+          "x": 1236.95,
+          "y": 758.8,
+          "zone": "walkway_far",
+          "confidence": 0.615
+        },
+        {
+          "track_id": 730,
+          "x": 1139.9,
+          "y": 845.2,
+          "zone": "walkway_near",
+          "confidence": 0.773
+        },
+        {
+          "track_id": 718,
+          "x": 734.55,
+          "y": 862.6,
+          "zone": "walkway_near",
+          "confidence": 0.71
+        },
+        {
+          "track_id": 869,
+          "x": 897.8,
+          "y": 838.3,
+          "zone": "walkway_near",
+          "confidence": 0.791
+        },
+        {
+          "track_id": 720,
+          "x": 253.39999999999998,
+          "y": 882.2,
+          "zone": "",
+          "confidence": 0.726
+        },
+        {
+          "track_id": 876,
+          "x": 1463.3,
+          "y": 654.8,
+          "zone": "",
+          "confidence": 0.392
+        },
+        {
+          "track_id": 590,
+          "x": 1358.05,
+          "y": 717.3,
+          "zone": "walkway_far",
+          "confidence": 0.374
+        },
+        {
+          "track_id": 673,
+          "x": 814.35,
+          "y": 858.4,
+          "zone": "walkway_near",
+          "confidence": 0.596
+        },
+        {
+          "track_id": 734,
+          "x": 665.8,
+          "y": 811.6,
+          "zone": "",
+          "confidence": 0.496
+        },
+        {
+          "track_id": 732,
+          "x": 1806.55,
+          "y": 670.4,
+          "zone": "",
+          "confidence": 0.377
+        },
+        {
+          "track_id": 742,
+          "x": 1563.85,
+          "y": 772.2,
+          "zone": "",
+          "confidence": 0.493
+        },
+        {
+          "track_id": 5,
+          "x": 984.95,
+          "y": 816.8,
+          "zone": "walkway_near",
+          "confidence": 0.781
+        },
+        {
+          "track_id": 648,
+          "x": 1323.3,
+          "y": 732.9,
+          "zone": "walkway_far",
+          "confidence": 0.611
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 4,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 1,
+          "confirmed_outflow": 3
+        },
+        {
+          "zone": "walkway_near",
+          "count": 5,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 8,
+          "confirmed_outflow": 11
+        }
+      ]
+    },
+    {
+      "frame": 331,
+      "t_ms": 13240,
+      "points": [
+        {
+          "track_id": 714,
+          "x": 1704.35,
+          "y": 1069.9,
+          "zone": "",
+          "confidence": 0.866
+        },
+        {
+          "track_id": 590,
+          "x": 1157.05,
+          "y": 914.1,
+          "zone": "walkway_near",
+          "confidence": 0.862
+        },
+        {
+          "track_id": 898,
+          "x": 566.45,
+          "y": 910.5,
+          "zone": "",
+          "confidence": 0.825
+        },
+        {
+          "track_id": 734,
+          "x": 743.9,
+          "y": 913.6,
+          "zone": "walkway_near",
+          "confidence": 0.856
+        },
+        {
+          "track_id": 5,
+          "x": 111.85,
+          "y": 1075.8,
+          "zone": "",
+          "confidence": 0.901
+        },
+        {
+          "track_id": 1000,
+          "x": 1255.65,
+          "y": 811.4,
+          "zone": "walkway_near",
+          "confidence": 0.753
+        },
+        {
+          "track_id": 993,
+          "x": 1659.65,
+          "y": 653.5,
+          "zone": "",
+          "confidence": 0.686
+        },
+        {
+          "track_id": 1003,
+          "x": 277.75,
+          "y": 865.6,
+          "zone": "",
+          "confidence": 0.868
+        },
+        {
+          "track_id": 673,
+          "x": 429.15000000000003,
+          "y": 1077.7,
+          "zone": "",
+          "confidence": 0.91
+        },
+        {
+          "track_id": 648,
+          "x": 1377.0,
+          "y": 909.3,
+          "zone": "",
+          "confidence": 0.676
+        },
+        {
+          "track_id": 962,
+          "x": 965.9,
+          "y": 741.9,
+          "zone": "walkway_far",
+          "confidence": 0.669
+        },
+        {
+          "track_id": 925,
+          "x": 1519.25,
+          "y": 661.5,
+          "zone": "",
+          "confidence": 0.695
+        },
+        {
+          "track_id": 742,
+          "x": 1445.5,
+          "y": 795.5,
+          "zone": "",
+          "confidence": 0.613
+        },
+        {
+          "track_id": 888,
+          "x": 888.2,
+          "y": 922.2,
+          "zone": "walkway_near",
+          "confidence": 0.885
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 1,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 3
+        },
+        {
+          "zone": "walkway_near",
+          "count": 4,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 9,
+          "confirmed_outflow": 12
+        }
+      ]
+    },
+    {
+      "frame": 332,
+      "t_ms": 13280,
+      "points": [
+        {
+          "track_id": 714,
+          "x": 1705.5,
+          "y": 1070.0,
+          "zone": "",
+          "confidence": 0.864
+        },
+        {
+          "track_id": 590,
+          "x": 1147.0,
+          "y": 924.4,
+          "zone": "walkway_near",
+          "confidence": 0.887
+        },
+        {
+          "track_id": 898,
+          "x": 523.75,
+          "y": 845.5,
+          "zone": "",
+          "confidence": 0.535
+        },
+        {
+          "track_id": 734,
+          "x": 696.45,
+          "y": 928.4,
+          "zone": "walkway_near",
+          "confidence": 0.818
+        },
+        {
+          "track_id": 5,
+          "x": 99.65,
+          "y": 1078.9,
+          "zone": "",
+          "confidence": 0.827
+        },
+        {
+          "track_id": 1000,
+          "x": 1241.8000000000002,
+          "y": 816.4,
+          "zone": "walkway_near",
+          "confidence": 0.706
+        },
+        {
+          "track_id": 1003,
+          "x": 250.85000000000002,
+          "y": 856.1,
+          "zone": "",
+          "confidence": 0.51
+        },
+        {
+          "track_id": 673,
+          "x": 395.9,
+          "y": 1080.0,
+          "zone": "",
+          "confidence": 0.846
+        },
+        {
+          "track_id": 648,
+          "x": 1341.9,
+          "y": 918.9,
+          "zone": "walkway_near",
+          "confidence": 0.747
+        },
+        {
+          "track_id": 925,
+          "x": 1518.2,
+          "y": 639.2,
+          "zone": "",
+          "confidence": 0.703
+        },
+        {
+          "track_id": 742,
+          "x": 1421.7,
+          "y": 802.3,
+          "zone": "",
+          "confidence": 0.452
+        },
+        {
+          "track_id": 888,
+          "x": 937.4000000000001,
+          "y": 927.3,
+          "zone": "walkway_near",
+          "confidence": 0.907
+        },
+        {
+          "track_id": 876,
+          "x": 1483.65,
+          "y": 701.0,
+          "zone": "",
+          "confidence": 0.695
+        },
+        {
+          "track_id": 708,
+          "x": 1624.3,
+          "y": 769.4,
+          "zone": "",
+          "confidence": 0.786
+        }
+      ],
+      "observed": true,
+      "flow_complete": false,
+      "zones": [
+        {
+          "zone": "walkway_far",
+          "count": 0,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 2,
+          "confirmed_outflow": 4
+        },
+        {
+          "zone": "walkway_near",
+          "count": 5,
+          "inflow": null,
+          "outflow": null,
+          "net_inflow": null,
+          "confirmed_inflow": 10,
+          "confirmed_outflow": 12
+        }
+      ]
+    }
+  ],
+  "events": [
+    {
+      "event_id": "49:0:17:boundary",
+      "kind": "boundary",
+      "track_id": 49,
+      "segment_id": 0,
+      "from_zone": "walkway_far",
+      "to_zone": "",
+      "frame": 17,
+      "timestamp_ms": 680,
+      "confidence": 0.764,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        804.95,
+        781.6
+      ],
+      "to_position": [
+        811.7,
+        797.6
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "2:0:19:boundary",
+      "kind": "boundary",
+      "track_id": 2,
+      "segment_id": 0,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 19,
+      "timestamp_ms": 760,
+      "confidence": 0.806,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1114.5,
+        1004.9
+      ],
+      "to_position": [
+        1013.35,
+        965.0
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "49:0:24:boundary",
+      "kind": "boundary",
+      "track_id": 49,
+      "segment_id": 0,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 24,
+      "timestamp_ms": 960,
+      "confidence": 0.882,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        767.5,
+        804.4
+      ],
+      "to_position": [
+        714.35,
+        825.9
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "49:0:24:zone_path",
+      "kind": "zone_path",
+      "track_id": 49,
+      "segment_id": 0,
+      "from_zone": "walkway_far",
+      "to_zone": "walkway_near",
+      "frame": 24,
+      "timestamp_ms": 960,
+      "confidence": 0.882,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        767.5,
+        804.4
+      ],
+      "to_position": [
+        714.35,
+        825.9
+      ],
+      "via_outside": true
+    },
+    {
+      "event_id": "3:3:50:boundary",
+      "kind": "boundary",
+      "track_id": 3,
+      "segment_id": 3,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 50,
+      "timestamp_ms": 2000,
+      "confidence": 0.781,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        775.7,
+        1002.4
+      ],
+      "to_position": [
+        678.35,
+        1030.8
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "48:3:52:boundary",
+      "kind": "boundary",
+      "track_id": 48,
+      "segment_id": 3,
+      "from_zone": "walkway_near",
+      "to_zone": "walkway_far",
+      "frame": 52,
+      "timestamp_ms": 2080,
+      "confidence": 0.79,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1225.5,
+        809.6
+      ],
+      "to_position": [
+        1262.5,
+        769.7
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "80:2:75:boundary",
+      "kind": "boundary",
+      "track_id": 80,
+      "segment_id": 2,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 75,
+      "timestamp_ms": 3000,
+      "confidence": 0.77,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1235.1999999999998,
+        813.4
+      ],
+      "to_position": [
+        1327.9,
+        790.1
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "129:5:75:boundary",
+      "kind": "boundary",
+      "track_id": 129,
+      "segment_id": 5,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 75,
+      "timestamp_ms": 3000,
+      "confidence": 0.723,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        974.25,
+        807.4
+      ],
+      "to_position": [
+        1058.25,
+        791.2
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "3:6:77:boundary",
+      "kind": "boundary",
+      "track_id": 3,
+      "segment_id": 6,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 77,
+      "timestamp_ms": 3080,
+      "confidence": 0.846,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        692.4,
+        1013.0
+      ],
+      "to_position": [
+        666.1500000000001,
+        950.0
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "178:2:96:boundary",
+      "kind": "boundary",
+      "track_id": 178,
+      "segment_id": 2,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 96,
+      "timestamp_ms": 3840,
+      "confidence": 0.738,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        990.45,
+        810.2
+      ],
+      "to_position": [
+        1029.6,
+        791.0
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "220:6:108:boundary",
+      "kind": "boundary",
+      "track_id": 220,
+      "segment_id": 6,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 108,
+      "timestamp_ms": 4320,
+      "confidence": 0.825,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1019.3000000000001,
+        1006.2
+      ],
+      "to_position": [
+        1046.8,
+        956.6
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "341:2:133:boundary",
+      "kind": "boundary",
+      "track_id": 341,
+      "segment_id": 2,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 133,
+      "timestamp_ms": 5320,
+      "confidence": 0.818,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        873.2,
+        971.7
+      ],
+      "to_position": [
+        948.5,
+        1039.0
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "341:2:138:boundary",
+      "kind": "boundary",
+      "track_id": 341,
+      "segment_id": 2,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 138,
+      "timestamp_ms": 5520,
+      "confidence": 0.738,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1007.3,
+        1008.9
+      ],
+      "to_position": [
+        1091.45,
+        970.0
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "325:4:158:boundary",
+      "kind": "boundary",
+      "track_id": 325,
+      "segment_id": 4,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 158,
+      "timestamp_ms": 6320,
+      "confidence": 0.452,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1377.15,
+        827.1
+      ],
+      "to_position": [
+        1415.85,
+        909.1
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "435:6:177:boundary",
+      "kind": "boundary",
+      "track_id": 435,
+      "segment_id": 6,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 177,
+      "timestamp_ms": 7080,
+      "confidence": 0.76,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        962.9499999999999,
+        996.6
+      ],
+      "to_position": [
+        930.75,
+        1078.8
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "232:15:198:boundary",
+      "kind": "boundary",
+      "track_id": 232,
+      "segment_id": 15,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 198,
+      "timestamp_ms": 7920,
+      "confidence": 0.792,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1097.3,
+        997.1
+      ],
+      "to_position": [
+        1031.35,
+        1056.4
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "232:15:201:boundary",
+      "kind": "boundary",
+      "track_id": 232,
+      "segment_id": 15,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 201,
+      "timestamp_ms": 8039,
+      "confidence": 0.637,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1031.35,
+        1056.4
+      ],
+      "to_position": [
+        1097.6,
+        922.5
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "582:1:215:boundary",
+      "kind": "boundary",
+      "track_id": 582,
+      "segment_id": 1,
+      "from_zone": "walkway_far",
+      "to_zone": "",
+      "frame": 215,
+      "timestamp_ms": 8600,
+      "confidence": 0.647,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1389.0500000000002,
+        756.8
+      ],
+      "to_position": [
+        1421.15,
+        817.6
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "718:0:253:boundary",
+      "kind": "boundary",
+      "track_id": 718,
+      "segment_id": 0,
+      "from_zone": "walkway_far",
+      "to_zone": "walkway_near",
+      "frame": 253,
+      "timestamp_ms": 10120,
+      "confidence": 0.858,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1025.0,
+        783.6
+      ],
+      "to_position": [
+        975.0,
+        873.7
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "748:0:267:boundary",
+      "kind": "boundary",
+      "track_id": 748,
+      "segment_id": 0,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 267,
+      "timestamp_ms": 10680,
+      "confidence": 0.784,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        637.7,
+        876.1
+      ],
+      "to_position": [
+        737.6500000000001,
+        863.8
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "748:0:271:boundary",
+      "kind": "boundary",
+      "track_id": 748,
+      "segment_id": 0,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 271,
+      "timestamp_ms": 10840,
+      "confidence": 0.365,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        787.15,
+        954.8
+      ],
+      "to_position": [
+        861.8,
+        1051.8
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "189:21:279:boundary",
+      "kind": "boundary",
+      "track_id": 189,
+      "segment_id": 21,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 279,
+      "timestamp_ms": 11160,
+      "confidence": 0.797,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        929.55,
+        964.5
+      ],
+      "to_position": [
+        910.4,
+        1079.9
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "734:10:313:boundary",
+      "kind": "boundary",
+      "track_id": 734,
+      "segment_id": 10,
+      "from_zone": "",
+      "to_zone": "walkway_far",
+      "frame": 313,
+      "timestamp_ms": 12520,
+      "confidence": 0.549,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        809.45,
+        796.1
+      ],
+      "to_position": [
+        821.0999999999999,
+        750.9
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "590:10:322:boundary",
+      "kind": "boundary",
+      "track_id": 590,
+      "segment_id": 10,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 322,
+      "timestamp_ms": 12880,
+      "confidence": 0.776,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1307.1,
+        806.5
+      ],
+      "to_position": [
+        1287.75,
+        822.6
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "898:4:327:boundary",
+      "kind": "boundary",
+      "track_id": 898,
+      "segment_id": 4,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 327,
+      "timestamp_ms": 13080,
+      "confidence": 0.858,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        737.6500000000001,
+        1002.7
+      ],
+      "to_position": [
+        635.8,
+        1045.3
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "734:11:332:boundary",
+      "kind": "boundary",
+      "track_id": 734,
+      "segment_id": 11,
+      "from_zone": "walkway_far",
+      "to_zone": "walkway_near",
+      "frame": 332,
+      "timestamp_ms": 13280,
+      "confidence": 0.818,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        839.55,
+        781.9
+      ],
+      "to_position": [
+        696.45,
+        928.4
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "590:12:352:boundary",
+      "kind": "boundary",
+      "track_id": 590,
+      "segment_id": 12,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 352,
+      "timestamp_ms": 14080,
+      "confidence": 0.766,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        800.7,
+        987.8
+      ],
+      "to_position": [
+        702.5,
+        1037.3
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "648:15:355:boundary",
+      "kind": "boundary",
+      "track_id": 648,
+      "segment_id": 15,
+      "from_zone": "",
+      "to_zone": "walkway_near",
+      "frame": 355,
+      "timestamp_ms": 14200,
+      "confidence": 0.775,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        999.3,
+        1041.6
+      ],
+      "to_position": [
+        1012.25,
+        940.5
+      ],
+      "via_outside": false
+    },
+    {
+      "event_id": "189:34:374:boundary",
+      "kind": "boundary",
+      "track_id": 189,
+      "segment_id": 34,
+      "from_zone": "walkway_near",
+      "to_zone": "",
+      "frame": 374,
+      "timestamp_ms": 14960,
+      "confidence": 0.834,
+      "confidence_kind": "heuristic_detection_support_not_calibrated",
+      "from_position": [
+        1025.05,
+        813.7
+      ],
+      "to_position": [
+        966.65,
+        793.0
+      ],
+      "via_outside": false
+    }
+  ],
+  "diagnostics": [
+    {
+      "frame": 23,
+      "track_id": 47,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 23,
+      "track_id": 7,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 24,
+      "resumed_frame": 25,
+      "track_id": 63,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 24,
+      "track_id": 80,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 27,
+      "resumed_frame": 49,
+      "track_id": 9,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 43,
+      "resumed_frame": 51,
+      "track_id": 113,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 44,
+      "resumed_frame": 50,
+      "track_id": 1,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 45,
+      "resumed_frame": 49,
+      "track_id": 13,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 49,
+      "resumed_frame": 63,
+      "track_id": 6,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 49,
+      "resumed_frame": 52,
+      "track_id": 90,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 50,
+      "track_id": 141,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 50,
+      "track_id": 142,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 50,
+      "resumed_frame": 54,
+      "track_id": 4,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 51,
+      "resumed_frame": 51,
+      "track_id": 1,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 51,
+      "track_id": 125,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 51,
+      "resumed_frame": 53,
+      "track_id": 129,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 51,
+      "track_id": 141,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 51,
+      "track_id": 9,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 51,
+      "resumed_frame": 55,
+      "track_id": 97,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 52,
+      "resumed_frame": 53,
+      "track_id": 1,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 52,
+      "track_id": 10,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 52,
+      "resumed_frame": 58,
+      "track_id": 13,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 193,
+      "resumed_frame": 199,
+      "track_id": 343,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 198,
+      "resumed_frame": 199,
+      "track_id": 435,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 198,
+      "resumed_frame": 199,
+      "track_id": 579,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 198,
+      "resumed_frame": 199,
+      "track_id": 586,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 199,
+      "resumed_frame": 199,
+      "track_id": 187,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 199,
+      "resumed_frame": 199,
+      "track_id": 189,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 199,
+      "resumed_frame": 204,
+      "track_id": 453,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 199,
+      "resumed_frame": 202,
+      "track_id": 477,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 199,
+      "track_id": 561,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 199,
+      "resumed_frame": 199,
+      "track_id": 589,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 200,
+      "resumed_frame": 200,
+      "track_id": 435,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 200,
+      "resumed_frame": 200,
+      "track_id": 579,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 200,
+      "resumed_frame": 200,
+      "track_id": 586,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 200,
+      "resumed_frame": 200,
+      "track_id": 589,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 234,
+      "resumed_frame": 253,
+      "track_id": 629,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 244,
+      "resumed_frame": 252,
+      "track_id": 477,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 252,
+      "track_id": 722,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 253,
+      "resumed_frame": 254,
+      "track_id": 187,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 253,
+      "resumed_frame": 253,
+      "track_id": 5,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 283,
+      "resumed_frame": 300,
+      "track_id": 732,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 294,
+      "resumed_frame": 299,
+      "track_id": 673,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 296,
+      "resumed_frame": 300,
+      "track_id": 742,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 297,
+      "resumed_frame": 300,
+      "track_id": 5,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 298,
+      "resumed_frame": 299,
+      "track_id": 343,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 298,
+      "resumed_frame": 299,
+      "track_id": 734,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 299,
+      "resumed_frame": 300,
+      "track_id": 648,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 299,
+      "resumed_frame": 302,
+      "track_id": 775,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 299,
+      "track_id": 780,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 299,
+      "track_id": 874,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 299,
+      "track_id": 876,
+      "reason": "unobserved_origin"
+    },
+    {
+      "frame": 300,
+      "track_id": 343,
+      "reason": "unobserved_destination"
+    },
+    {
+      "frame": 300,
+      "resumed_frame": 301,
+      "track_id": 435,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 300,
+      "resumed_frame": 301,
+      "track_id": 874,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 303,
+      "resumed_frame": 332,
+      "track_id": 876,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 320,
+      "resumed_frame": 332,
+      "track_id": 708,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 329,
+      "resumed_frame": 331,
+      "track_id": 742,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 330,
+      "resumed_frame": 331,
+      "track_id": 888,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 331,
+      "resumed_frame": 338,
+      "track_id": 189,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 332,
+      "resumed_frame": 332,
+      "track_id": 888,
+      "reason": "suspected_id_switch"
+    },
+    {
+      "frame": 332,
+      "resumed_frame": 333,
+      "track_id": 962,
+      "reason": "id_gap_or_duplicate"
+    },
+    {
+      "frame": 332,
+      "resumed_frame": 344,
+      "track_id": 993,
+      "reason": "id_gap_or_duplicate"
+    }
+  ],
+  "routes": [
+    {
+      "from_zone": "walkway_far",
+      "to_zone": "walkway_near",
+      "transitions": 3
+    },
+    {
+      "from_zone": "walkway_near",
+      "to_zone": "walkway_far",
+      "transitions": 1
+    }
+  ],
+  "observed_od": [],
+  "od_note": "One start/end pair per unfragmented observed ID with zone change; censored observations, not true journey OD",
+  "coverage": {
+    "verified_frame_count": 404,
+    "complete_frame_index": true,
+    "incomplete_track_ids": 154,
+    "unresolved_paths": 1504
+  },
+  "event_provenance": "derived_read_only_from_immutable_tracking",
+  "fixture_note": "Actual persisted GPU track samples; bounded frames only, not a complete replay index"
+}

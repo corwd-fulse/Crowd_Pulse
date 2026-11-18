@@ -30,7 +30,7 @@ const STATUS_LABELS: Record<AnalysisJobResponse['status'], string> = {
 };
 
 
-export default function CameraViewer({onJobCreated, trackedJob}: {onJobCreated?: (job: AnalysisJobResponse) => void; trackedJob?: AnalysisJobResponse | null}) {
+export default function CameraViewer({onJobCreated, trackedJob, venueId='main'}: {venueId?:string;onJobCreated?: (job: AnalysisJobResponse) => void; trackedJob?: AnalysisJobResponse | null}) {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [fileName, setFileName] = useState('');
   const [localForJob,setLocalForJob]=useState<string|null>();
@@ -242,7 +242,7 @@ export default function CameraViewer({onJobCreated, trackedJob}: {onJobCreated?:
 
       {/* 영상 미리보기 */}
       <div className="monitor-stage relative min-w-0 bg-monitor" style={{height:'auto',minHeight:0,flexShrink:0}}>
-        {showServer&&trackedJob?<MonitoringPlayer key={trackedJob.id} job={trackedJob}/>:showLocal&&videoUrl ? (
+        {showServer&&trackedJob?<MonitoringPlayer key={venueId+trackedJob.id} venueId={venueId} job={trackedJob}/>:showLocal&&videoUrl ? (
           <video
             key={videoUrl}
             src={videoUrl}
@@ -302,6 +302,7 @@ export default function CameraViewer({onJobCreated, trackedJob}: {onJobCreated?:
 
             <input
               type="file"
+              aria-label="분석 영상 업로드"
               accept={VIDEO_EXTENSIONS.join(',')}
               disabled={isUploading || isRequestingAnalysis}
               onChange={handleVideoUpload}

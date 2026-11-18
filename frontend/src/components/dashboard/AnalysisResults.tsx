@@ -2,7 +2,7 @@ import {useState} from 'react';
 import {CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis} from 'recharts';
 import type {AnalysisJobResponse, VisionResultBundle} from '../../services/api';
 import {api} from '../../services/api';
-import {crowdSeries, directionLabel, formatMetric, relativeSeconds} from '../../services/visionPresentation';
+import {bottleneckReason, crowdSeries, directionLabel, formatMetric, relativeSeconds} from '../../services/visionPresentation';
 import {useVisionResult} from '../../hooks/useVisionResult';
 import StartCard from './StartCard';
 
@@ -22,6 +22,7 @@ export default function AnalysisResults({job}: {job: AnalysisJobResponse | null}
 function ResultView({data}: {data: VisionResultBundle}) {
   const {summary} = data;
   const fast = summary.analysis_profile === 'fast';
+  const scoreUnavailable = summary.components?.bottleneck === 'unanalyzed';
   const [region, setRegion] = useState('');
   const [page, setPage] = useState(0);
   const metrics = data.metrics.filter((row) => !region || row.region_key === region);
@@ -48,6 +49,7 @@ function ResultView({data}: {data: VisionResultBundle}) {
           <span className="rounded-sm border border-brand px-2 py-1 text-brand">{summary.analysis_mode === 'test' ? '테스트 분석 결과' : '운영 분석 결과'}</span>
           <span className="rounded-sm border border-line px-2 py-1 text-ink-soft">{unapproved ? '미승인 ROI' : '승인 ROI'}</span>
           <span className="rounded-sm border border-line px-2 py-1 text-ink-soft">{summary.direction_presentation.quality === 'unvalidated' ? '방향 품질 미검증' : summary.direction_presentation.quality === 'rejected' ? '방향 사용 제한' : '방향 품질 검증 기록 있음'}</span>
+          {summary.execution_snapshot.settings?.flow_method === 'roi_crop_128' && <span className="rounded-sm border border-line px-2 py-1 text-warn">ROI Crop 128 실험 분석</span>}
         </div>
         <p className="mt-3 break-all text-xs text-muted">작업 {summary.analysis_job_id} · 버전 {summary.direction_presentation.algorithm_version}</p>
         <p className="mt-1 break-all text-xs text-muted">분석 대상 영상 ID {summary.video_id}</p>
@@ -59,7 +61,7 @@ function ResultView({data}: {data: VisionResultBundle}) {
         <StartCard featured title="구역 최고 평균 인원" value={values.length ? `${formatMetric(values.reduce((peak, value) => Math.max(peak, value), 0))}명` : '—'} description="구역·초별 평균 중 최댓값" />
         <StartCard title="유입 집계 합계" value={formatMetric(total('inflow'))} description="선택 구역·영상 기간 합계 / 고유 인원 아님" />
         <StartCard title="유출 집계 합계" value={formatMetric(total('outflow'))} description="선택 구역·영상 기간 합계 / 고유 인원 아님" />
-        <StartCard color="amber" title="최고 병목 점수" value={fast?'미분석':peakScore === null ? '—' : `${formatMetric(peakScore)} / 100`} description={fast?'FAST는 병목 위험도를 평가하지 않습니다':'병목 연구 지표 / 혼잡도 퍼센트 아님'} />
+        <StartCard color="amber" title="최고 병목 점수" value={fast || scoreUnavailable?'미분석':peakScore === null ? '—' : `${formatMetric(peakScore)} / 100`} description={fast?'FAST는 병목 위험도를 평가하지 않습니다':'병목 연구 지표 / 혼잡도 퍼센트 아님'} />
       </div>
 
       <div className="rounded-lg border border-line bg-surface p-5">
@@ -77,10 +79,22 @@ function ResultView({data}: {data: VisionResultBundle}) {
       </div>
 
       <div className="overflow-hidden rounded-lg border border-line bg-surface">
+        <h3 className="px-5 py-4 text-sm font-bold text-ink">개인 이동·구역 흐름 일치도</h3>
+        <p className="px-5 pb-3 text-xs text-muted">개인별 시간창 이동과 구역 Optical Flow를 독립 비교합니다. 유효 ID 3명 이상일 때 방향을 비교하며 이동량은 혼합하지 않습니다. 방향별 인원은 초별 유효 ID 수로, 고유 방문자 수가 아닙니다. 픽셀 속도는 실제 m/s가 아닙니다.</p>
+        {!metrics.some(row => row.hybrid) ? <p className="px-5 pb-4 text-sm text-muted">이 작업에는 하이브리드 신뢰도 정보가 없습니다.</p> : <div className="overflow-x-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken"><tr>{['영상 시간', '구역', '유효 ID', '개인 대표 방향 (추정)', '개인 속도 중앙값 (px/s)', '방향별 인원 → ↓ ← ↑', '원형 방향차', '분석 신뢰도'].map(title => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead><tbody>{tableRows.filter(row => row.hybrid).map(row => {
+          const h = row.hybrid!;
+          const reasons: Record<string, string> = {agreement: '방향 일치 / 품질 미검증', insufficient_tracks: '유효 추적 인원 부족', mixed_individual_directions: '개인 방향 혼재', flow_unavailable: '구역 흐름 미분석', weak_net_flow: '구역 순이동 부족', direction_disagreement: '개인·구역 방향 불일치'};
+          return <tr key={`${row.region_key}-${row.video_offset_ms}`} className="border-t border-line"><td className="px-4 py-3">{relativeSeconds(row.video_offset_ms)}</td><td className="px-4 py-3">{row.region_key}</td><td className="px-4 py-3">{h.valid_track_count}</td><td className="px-4 py-3">{h.individual_angle_deg === null ? '미분석' : `${formatMetric(h.individual_angle_deg)}° (미검증 추정)`}</td><td className="px-4 py-3">{h.median_speed_px_per_second === null ? '미분석' : formatMetric(h.median_speed_px_per_second)}</td><td className="whitespace-nowrap px-4 py-3">{h.direction_counts.right} / {h.direction_counts.down} / {h.direction_counts.left} / {h.direction_counts.up}</td><td className="px-4 py-3">{h.circular_difference_deg === null ? '미분석' : `${formatMetric(h.circular_difference_deg)}°`}</td><td className={`px-4 py-3 ${h.low_confidence ? 'text-warn' : 'text-ink-soft'}`}>{h.low_confidence ? 'low_confidence · ' : ''}{reasons[h.reason] || h.reason}</td></tr>;
+        })}</tbody></table></div>}
+      </div>
+
+      <div className="overflow-hidden rounded-lg border border-line bg-surface">
         <h3 className="px-5 py-4 text-sm font-bold text-ink">병목 점수·위험 등급</h3>
+        {(scoreUnavailable || summary.components?.bottleneck === 'partial') && <p role="status" className="px-5 pb-4 text-sm text-warn">필수 지표가 부족한 구간은 병목 점수·위험 등급 미분석입니다. 위험 없음 판정이 아닙니다. 계산 가능한 구간만 표시합니다.</p>}
+        {!fast && summary.bottleneck_status?.filter(row => row.status === 'unanalyzed' && (!region || row.zone === region)).map(row => <p key={`${row.zone}-${row.window_start}`} className="px-5 pb-2 text-xs text-warn">{row.zone} · {row.window_start}초 창: 미분석 — {bottleneckReason(row)}</p>)}
         {fast&&<p role="status" className="px-5 pb-4 text-sm text-warn">Optical Flow·병목 미분석 — FAST에서는 실행하지 않았습니다. 위험 없음 판정이 아닙니다. 영상 관리에서 FULL 정밀 분석을 별도로 요청하세요.</p>}
         <p className="px-5 pb-3 text-xs text-muted">점수는 연구용 지표입니다. 실제 사고·위험 확정 판정이 아닙니다.</p>
-        {fast?null:!scores.length ? <p className="px-5 pb-5 text-sm text-muted">저장된 병목 점수가 없습니다. 빈 결과도 정상 분석 완료일 수 있습니다.</p> : <div className="max-h-80 overflow-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken"><tr>{['윈도우 시작', '구역', '점수 (0–100)', '위험 등급', '증가·둔화·불균형'].map((title) => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead><tbody>{scores.map((row) => <tr key={`${row.region_key}-${row.window_start_ms}`} className="border-t border-line"><td className="px-4 py-3">{relativeSeconds(row.window_start_ms)}</td><td className="px-4 py-3">{row.region_key}</td><td className="px-4 py-3">{formatMetric(row.score)}</td><td className={`px-4 py-3 ${row.severity === 'high' ? 'text-danger' : row.severity === 'medium' ? 'text-warn' : 'text-ok'}`}>{row.risk_level}</td><td className="px-4 py-3">{formatMetric(row.growth)} · {formatMetric(row.slowdown)} · {formatMetric(row.imbalance)}</td></tr>)}</tbody></table></div>}
+        {fast || scoreUnavailable?null:!scores.length ? <p className="px-5 pb-5 text-sm text-muted">저장된 병목 점수가 없습니다. 빈 결과도 정상 분석 완료일 수 있습니다.</p> : <div className="max-h-80 overflow-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken"><tr>{['윈도우 시작', '구역', '점수 (0–100)', '위험 등급', '증가·둔화·불균형'].map((title) => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead><tbody>{scores.map((row) => <tr key={`${row.region_key}-${row.window_start_ms}`} className="border-t border-line"><td className="px-4 py-3">{relativeSeconds(row.window_start_ms)}</td><td className="px-4 py-3">{row.region_key}</td><td className="px-4 py-3">{formatMetric(row.score)}</td><td className={`px-4 py-3 ${row.severity === 'high' ? 'text-danger' : row.severity === 'medium' ? 'text-warn' : 'text-ok'}`}>{row.risk_level}</td><td className="px-4 py-3">{formatMetric(row.growth)} · {formatMetric(row.slowdown)} · {formatMetric(row.imbalance)}</td></tr>)}</tbody></table></div>}
       </div>
 
       <div className="rounded-lg border border-line bg-surface p-5 text-xs text-muted"><h3 className="mb-2 font-semibold text-ink">결과 CSV ({Object.keys(summary.artifacts).length}개)</h3><p className="mb-3">개인 방향 원시값과 reliable은 CSV에 보존됩니다. n_tracks는 고유 인원수가 아닌 표본 수이고 speed_px는 실제 속도가 아닙니다.</p><div className="flex flex-wrap gap-3">{Object.entries(summary.artifacts).map(([kind, artifact]) => <a key={kind} className="text-brand underline" href={api.getUri({url: artifact.download_url})}>{kind} · {artifact.rows.toLocaleString()}행</a>)}</div></div>

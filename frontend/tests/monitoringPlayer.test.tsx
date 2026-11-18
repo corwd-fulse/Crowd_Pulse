@@ -28,7 +28,7 @@ it('uses the selected job server video and common detection overlay on the dashb
   const video=metadata();
   expect(video.getAttribute('src')).toContain(`/api/videos/${job.video_id}/stream`);
   expect(screen.getByText('서버 영상 재생')).toBeTruthy();
-  await waitFor(()=>expect(getDetections).toHaveBeenCalledWith(job.id,expect.any(AbortSignal)));
+  await waitFor(()=>expect(getDetections).toHaveBeenCalledWith(job.id,expect.any(AbortSignal),0,5000));
   video.currentTime=2;fireEvent(video,new Event('seeked'));
   await screen.findByText('ID 7');
   expect(container.querySelector('svg[data-frame] rect')?.getAttribute('width')).toBe('90');
@@ -50,7 +50,7 @@ it('keeps a selected local file separate even after upload succeeds',async()=>{
   vi.mocked(uploadVideo).mockResolvedValue({video_id:'new-upload',filename:'local.mp4',saved_filename:'new.mp4',file_size:5,status:'uploaded',data_source:'user_upload'});
   const {container}=render(<CameraViewer trackedJob={job}/>);metadata();
   await waitFor(()=>expect(getDetections).toHaveBeenCalledTimes(1));
-  fireEvent.change(container.querySelector('input[type=file]')!,{target:{files:[new File(['local'],'local.mp4',{type:'video/mp4'})]}});
+  fireEvent.change(screen.getByLabelText('분석 영상 업로드'),{target:{files:[new File(['local'],'local.mp4',{type:'video/mp4'})]}});
   await screen.findByText(/로컬 파일 재생 · 서버 업로드 완료/);
   expect(screen.getByLabelText('대시보드 로컬 영상').getAttribute('src')).toBe('blob:local-only');
   expect(container.querySelector('svg[data-frame]')).toBeNull();

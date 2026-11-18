@@ -2,6 +2,13 @@ import type {RoiSnapshot} from './api';
 export type Point = [number, number];
 export type Zone = RoiSnapshot['zones'][number];
 const eps = 1e-7;
+export function nextZoneName(zones:Zone[]):string {
+  for(let i=0;;i++) {
+    let n=i+1,name='';
+    while(n>0){n--;name=String.fromCharCode(65+n%26)+name;n=Math.floor(n/26);}
+    if(!zones.some(z=>z.name===name))return name;
+  }
+}
 const cross = (a: Point, b: Point, c: Point) => (b[0]-a[0])*(c[1]-a[1])-(b[1]-a[1])*(c[0]-a[0]);
 const on = (a: Point,b: Point,p: Point) => Math.abs(cross(a,b,p))<eps && p[0]>=Math.min(a[0],b[0])-eps && p[0]<=Math.max(a[0],b[0])+eps && p[1]>=Math.min(a[1],b[1])-eps && p[1]<=Math.max(a[1],b[1])+eps;
 function intersects(a: Point,b: Point,c: Point,d: Point) {
@@ -28,6 +35,8 @@ export function validateZones(zones: Zone[],resolution: Point): string[] {
   const names=new Set<string>();
   for(const [index,z] of zones.entries()) {
     const label=`구역 ${index+1}`;
+    if(z.color!==undefined&&!/^#[0-9a-fA-F]{6}$/.test(z.color))errors.push(`${label}: 색상 형식 오류입니다.`);
+    if(z.visible!==undefined&&typeof z.visible!=='boolean')errors.push(`${label}: 표시 설정 오류입니다.`);
     if(!z.name.trim() || z.name.length>100 || names.has(z.name.trim())) errors.push(`${label}: 이름은 중복 없이 1~100자로 입력하세요.`);
     names.add(z.name.trim());
     const p=z.polygon;

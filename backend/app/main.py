@@ -9,6 +9,11 @@ from routers.videos import router as videos_router
 from routers import analysis
 from routers.vision_results import router as vision_results_router
 from routers.video_rois import router as video_rois_router
+from routers.population_forecast import router as population_forecast_router
+from routers.venues import router as venues_router
+from routers.concentration import router as concentration_router
+from routers.capture_sessions import router as capture_sessions_router
+from routers.capture_uploads import router as capture_uploads_router
 
 
 app = FastAPI(
@@ -25,6 +30,11 @@ app.include_router(videos_router)
 app.include_router(analysis.router)
 app.include_router(vision_results_router)
 app.include_router(video_rois_router)
+app.include_router(population_forecast_router)
+app.include_router(venues_router)
+app.include_router(concentration_router)
+app.include_router(capture_sessions_router)
+app.include_router(capture_uploads_router)
 
 # React 개발 서버 접근 허용
 app.add_middleware(

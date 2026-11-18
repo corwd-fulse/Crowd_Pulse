@@ -2,6 +2,10 @@
 import csv
 import hashlib
 import math
+import sqlite3
+import shutil
+import tempfile
+from contextlib import closing
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -13,6 +17,19 @@ Angle = Annotated[float, Field(ge=0, lt=360)]
 Unit = Annotated[float, Field(ge=0, le=1)]
 RISK_MAPPING = {'낮음': 'low', '주의': 'medium', '높음': 'high'}
 MAX_FILE_BYTES = 64 * 1024 * 1024
+# Large input is bounded on disk, not by an unbounded Python set/list.
+MAX_STREAM_FILE_BYTES = 2 * 1024**3
+MAX_STREAM_ROWS = 100_000_000
+MEMORY_ROWS = 10_000
+
+
+class DiskRows:
+    """Repeatable validated rows; no raw directional rows are kept in RAM."""
+    def __init__(self,path,model,count):self.path=Path(path);self.model=model;self.count=count
+    def __iter__(self):
+        with self.path.open(encoding='utf-8-sig',newline='') as stream:
+            for raw in csv.DictReader(stream):yield self.model.model_validate(raw).model_dump()
+    def __len__(self):return self.count
 SCHEMAS = {
     'crowd_observations': ['sec', 'zone', 'count', 'inflow', 'outflow'],
     'flow': ['sec', 'zone', 'angle_deg', 'magnitude_px', 'motion', 'low_confidence'],
@@ -184,14 +201,19 @@ def validate_bundle(paths: dict[str, Path], roi: dict, metadata: ExecutionMetada
     if not math.isfinite(duration) or duration * 1000 > 2**63-1:
         raise InvalidResult('Video duration cannot be represented in milliseconds')
     for kind, path in paths.items():
-        if path.stat().st_size > MAX_FILE_BYTES:
-            raise InvalidResult('CSV file exceeds 64MiB')
+        if path.stat().st_size > MAX_STREAM_FILE_BYTES:
+            raise InvalidResult('CSV exceeds bounded streaming file budget (2GiB)')
         with path.open('rb') as stream:
             digest = hashlib.file_digest(stream, 'sha256').hexdigest()
-        rows, seen, missing, count = [], set(), {name: 0 for name in SCHEMAS[kind]}, 0
+        if shutil.disk_usage(tempfile.gettempdir()).free < path.stat().st_size*4+256*1024**2:
+            raise InvalidResult('Insufficient disk reserve for streaming duplicate validation')
+        rows, missing, count = [], {name: 0 for name in SCHEMAS[kind]}, 0
+        observed_zones=set()
         number = 1
         try:
-            with path.open(encoding='utf-8-sig', newline='') as stream:
+            with tempfile.TemporaryDirectory(prefix='crowd-csv-keys-') as directory, path.open(encoding='utf-8-sig', newline='') as stream, closing(sqlite3.connect(str(Path(directory)/'keys.sqlite'))) as keys:
+                keys.execute('PRAGMA cache_size=-4096');keys.execute('PRAGMA temp_store=FILE')
+                keys.execute('CREATE TABLE seen(a INTEGER,b TEXT,PRIMARY KEY(a,b)) WITHOUT ROWID')
                 reader = csv.DictReader(stream)
                 if reader.fieldnames != SCHEMAS[kind]:
                     raise InvalidResult(f'{kind}: unexpected CSV header')
@@ -207,25 +229,25 @@ def validate_bundle(paths: dict[str, Path], roi: dict, metadata: ExecutionMetada
                         if row.zone not in zones or second >= duration:
                             raise ValueError('Unknown zone or offset outside video')
                         key = (second, row.zone)
-                    if key in seen:
-                        raise ValueError('Duplicate CSV key')
-                    seen.add(key)
+                    try:keys.execute('INSERT INTO seen VALUES(?,?)',(key[0],str(key[1])))
+                    except sqlite3.IntegrityError:raise ValueError('Duplicate CSV key') from None
                     for name, value in item.items():
                         missing[name] += value is None
                     count += 1
-                    if count > (1_000_000 if kind == 'individual_directions' else 100_000):
-                        raise ValueError('CSV row limit exceeded')
+                    if count > MAX_STREAM_ROWS:raise ValueError('CSV streaming row budget exceeded')
+                    if kind=='crowd_observations':observed_zones.add(row.zone)
                     if kind != 'individual_directions':
-                        rows.append(item)
+                        if count<=MEMORY_ROWS:rows.append(item)
+                        elif count==MEMORY_ROWS+1:rows.clear()
         except (ValidationError, ValueError, UnicodeError, csv.Error) as exc:
             # Do not reflect raw uploaded cells or sensitive file paths.
             raise InvalidResult(f'{kind}: invalid data at CSV row {locals().get("number", 1)} ({type(exc).__name__})') from None
         summaries[kind] = {'sha256': digest, 'bytes': path.stat().st_size, 'rows': count, 'missing': missing}
-        records[kind] = rows
+        records[kind] = DiskRows(path,models[kind],count) if kind!='individual_directions' and count>MEMORY_ROWS else rows
+        if kind=='crowd_observations' and observed_zones!=zones:
+            raise InvalidResult('Observations must cover all configured zones')
     # Empty score/raw direction/aggregate files are legitimate. Observations must
     # cover every configured zone at least once, even for an empty scene.
-    if set(r['zone'] for r in records['crowd_observations']) != zones:
-        raise InvalidResult('Observations must cover all configured zones')
     if metadata.analysis_profile == 'fast' and any(summaries[k]['rows'] for k in ('flow','bottleneck_scores')):
         raise InvalidResult('FAST results must not contain Optical Flow or bottleneck score rows')
     return status, summaries, records

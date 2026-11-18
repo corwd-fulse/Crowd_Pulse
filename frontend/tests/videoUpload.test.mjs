@@ -25,10 +25,14 @@ test('200MiB boundary matches backend, including its acceptance of empty files',
 // Load the Vite module under Node without needing a browser or live upload server.
 const require = createRequire(import.meta.url);
 const source = await readFile(new URL('../src/services/api.ts', import.meta.url), 'utf8');
+const cacheSource=await readFile(new URL('../src/services/mediaWindowCache.ts',import.meta.url),'utf8');
+const cacheCode=ts.transpileModule(cacheSource,{compilerOptions:{module:ts.ModuleKind.ESNext,target:ts.ScriptTarget.ES2023}}).outputText;
+const cacheUrl=`data:text/javascript;base64,${Buffer.from(cacheCode).toString('base64')}`;
 const compiled = ts.transpileModule(source, {
   compilerOptions: {module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2023},
 }).outputText
   .replace('import.meta.env', '({})')
+  .replace("'./mediaWindowCache'",JSON.stringify(cacheUrl))
   .replace("'axios'", JSON.stringify(pathToFileURL(require.resolve('axios')).href));
 const {api, uploadVideo, createAnalysisJob, getAnalysisJob, getVideos, getAnalysisJobsByVideo} = await import(`data:text/javascript;base64,${Buffer.from(compiled).toString('base64')}`);
 
