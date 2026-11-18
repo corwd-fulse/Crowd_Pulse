@@ -41,3 +41,19 @@ def test_extended_pipeline_produces_new_files_without_touching_core_schemas(tmp_
 
     quality = json.loads(open(paths["tracking_quality"]).read())
     assert quality["track_count"] == 1
+
+
+def test_extended_pipeline_adds_speed_files_only_with_calibration(tmp_path):
+    video_path = tmp_path / "v.mp4"
+    _write_video(video_path)
+    zone = Zone("A", [(0, 0), (120, 0), (120, 120), (0, 120)])
+    rows = [[f, f * 100, 1, 10 + f, 10, 20 + f, 20, 0.9] for f in range(10)]
+    det_path = tmp_path / "det.csv"
+    _write_detections(det_path, rows)
+
+    paths = run_extended_zone_pipeline(
+        str(video_path), str(det_path), [zone], str(tmp_path / "out"), pixels_per_meter=50.0
+    )
+
+    assert "crowd_speed_zone" in paths
+    assert "crowd_speed_individual" in paths

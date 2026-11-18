@@ -13,8 +13,9 @@ import cv2
 import pandas as pd
 
 from .bottleneck import compute_bottleneck_scores
+from .crowd_speed import PixelsPerMeter, compute_individual_speed, compute_zone_speed
 from .density_heatmap import compute_density_heatmap
-from .individual_flow import aggregate_by_zone, compute_counter_flow, compute_individual_directions
+from .individual_flow import DEFAULT_WINDOW_FRAMES, aggregate_by_zone, compute_counter_flow, compute_individual_directions
 from .optical_flow import compute_zone_motion
 from .queue_analysis import compute_queue_scores
 from .tracking_eval import evaluate_tracking
@@ -76,8 +77,13 @@ def run_extended_zone_pipeline(
     detections_csv: str,
     zones: list[Zone],
     out_dir: str,
+    *,
+    pixels_per_meter: PixelsPerMeter | None = None,
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
+
+    pixels_per_meter: 카메라 보정값이 있을 때만 전달(crowd_speed.py). 없으면(기본값) 속도는
+    m/s로 환산하지 않고 그대로 생략한다 — 보정 없이 환산하면 틀린 값을 사실처럼 내보내게 된다.
 
     run_zone_pipeline()의 다섯 결과 파일(crowd_observations/flow/individual_directions/
     individual_zone_agg/bottleneck_scores)은 worker.py가 analysis_jobs DB 저장 시 정확히
@@ -119,5 +125,20 @@ def run_extended_zone_pipeline(
     queue_scores.to_csv(paths["queue_scores"], index=False)
     heatmap.to_csv(paths["density_heatmap"], index=False)
     paths["tracking_quality"].write_text(json.dumps(tracking_quality, indent=2, ensure_ascii=False))
+
+    if pixels_per_meter is not None:
+        zone_speed = compute_zone_speed(motion_ts, fps=fps, pixels_per_meter=pixels_per_meter)
+        paths["crowd_speed_zone"] = out / "crowd_speed_zone.csv"
+        zone_speed.to_csv(paths["crowd_speed_zone"], index=False)
+
+        # 개인별 속도는 구역 하나짜리 단일 비율(float)일 때만 낸다. dict(구역별 비율)로 받았을 때
+        # 어느 비율을 적용할지는 그 순간 그 사람이 있는 구역을 다시 조회해야 해서, 여기서는
+        # 섣불리 아무 값이나 고르지 않고 생략한다.
+        if isinstance(pixels_per_meter, (int, float)):
+            individual_speed = compute_individual_speed(
+                individual, fps=fps, pixels_per_meter=pixels_per_meter, window_frames=DEFAULT_WINDOW_FRAMES
+            )
+            paths["crowd_speed_individual"] = out / "crowd_speed_individual.csv"
+            individual_speed.to_csv(paths["crowd_speed_individual"], index=False)
 
     return {k: str(v) for k, v in paths.items()}
