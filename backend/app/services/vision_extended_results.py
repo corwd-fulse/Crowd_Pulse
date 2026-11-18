@@ -14,7 +14,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models import VisionExtendedResult, VisionResult
+from app.models import AnalysisJob, VisionExtendedResult, VisionResult
 from app.services.vision_extended_csv import InvalidExtendedResult, validate_extended_bundle
 from app.services.vision_results import BASE_DIR, JobNotFound, ResultConflict
 
@@ -82,6 +82,8 @@ def store_extended_result(
 
 
 def extended_result_for_job(db: Session, job_id: UUID) -> VisionExtendedResult:
+    if db.get(AnalysisJob, job_id) is None:
+        raise JobNotFound('Analysis job not found')
     result = db.get(VisionExtendedResult, job_id)
     if result is None:
         raise JobNotFound('No imported extended result for this analysis job')
