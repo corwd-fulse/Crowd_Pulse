@@ -1,6 +1,6 @@
 import csv
 
-from app.services.zone_analysis import Zone, compute_zone_timeseries, load_zones_from_json
+from app.services.zone_analysis import Zone, compute_dwell_times, compute_zone_timeseries, load_zones_from_json
 
 ZONE_A = Zone("A", [(0, 0), (100, 0), (100, 100), (0, 100)])
 ZONE_B = Zone("B", [(200, 0), (300, 0), (300, 100), (200, 100)])
@@ -86,6 +86,29 @@ def test_empty_zone_is_zero_not_missing(tmp_path):
     b_rows = out[out.zone == "B"]
     assert len(b_rows) > 0
     assert (b_rows["count"] == 0).all()
+
+
+def test_dwell_time_in_zone_a(tmp_path):
+    # track 1: A에 들어가 60프레임(=2초, fps=30) 머물다 나간다.
+    rows = [[f, f * 33, 1, 10, 10, 20, 20, 0.9] for f in range(60)]
+    rows += [[f, f * 33, 1, 10, 10, 20, 20 + 20 * (f - 60), 0.9] for f in range(60, 70)]
+    csv_path = tmp_path / "det.csv"
+    _write_detections(csv_path, rows)
+
+    out = compute_dwell_times(str(csv_path), [ZONE_A, ZONE_B], fps=30.0)
+    row = out[(out.track_id == 1) & (out.zone == "A")].iloc[0]
+    assert row.enter_sec == 0
+    assert 1.9 <= row.dwell_s <= 2.5
+
+
+def test_dwell_without_exit_is_excluded(tmp_path):
+    # track 2: 영상이 끝날 때까지 A를 떠나지 않음 -> 체류 종료 시점 알 수 없어 집계 제외.
+    rows = [[f, f * 33, 2, 10, 10, 20, 20, 0.9] for f in range(60)]
+    csv_path = tmp_path / "det.csv"
+    _write_detections(csv_path, rows)
+
+    out = compute_dwell_times(str(csv_path), [ZONE_A, ZONE_B], fps=30.0)
+    assert out.empty
 
 
 def test_load_zones_from_json(tmp_path):

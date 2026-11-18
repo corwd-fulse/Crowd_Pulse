@@ -49,6 +49,18 @@ def test_shifting_video_has_positive_magnitude_and_consistent_direction(tmp_path
     assert moving["magnitude_px"].mean() > 0.5
 
 
+def test_frame_stride_still_detects_motion_direction(tmp_path):
+    base = _textured_frame()
+    frames = [np.roll(base, shift=i * 2, axis=1) for i in range(20)]
+    video_path = tmp_path / "moving_long.mp4"
+    _write_video(video_path, frames)
+
+    out = compute_zone_motion(str(video_path), [ZONE], fps=10, frame_stride=4)
+    moving = out.dropna(subset=["magnitude_px"])
+    assert not moving.empty
+    assert moving["magnitude_px"].mean() > 0.5
+
+
 def test_angle_near_0_360_boundary_averages_correctly(tmp_path):
     # 프레임마다 오른쪽으로 5px 이동하되 위/아래로 1px씩 번갈아 흔들려서, 프레임별 각도가
     # 0도 바로 양옆(약 348.7도, 11.3도)을 오간다. 이를 "각도끼리" 산술평균하면 (348.7+11.3)/2

@@ -24,14 +24,27 @@ def _zone_mask(zone: Zone, shape: tuple[int, int]) -> np.ndarray:
     return mask
 
 
-def compute_zone_motion(video_path: str, zones: list[Zone], fps: float | None = None) -> pd.DataFrame:
+def compute_zone_motion(
+    video_path: str,
+    zones: list[Zone],
+    fps: float | None = None,
+    frame_stride: int = 1,
+) -> pd.DataFrame:
     """반환: columns = [sec, zone, angle_deg, magnitude_px, motion, low_confidence].
 
     주의: 각도를 프레임마다 구한 뒤 "각도끼리" 평균 내면 0/360도 경계(예: 358도와 2도)에서
     산술평균이 180도처럼 완전히 틀린 값이 나온다(원형 통계 문제). 그래서 프레임별 각도/크기로
     바꾸기 전의 (mx, my) 벡터 성분 상태로 누적해서 평균 낸 뒤, 마지막에 한 번만 각도/크기로
     변환한다 — 벡터 합산은 경계를 지나도 불연속이 없다.
+
+    frame_stride: 장시간 영상 속도 최적화용. 이 영상의 가장 비싼 연산인
+    calcOpticalFlowFarneback()을 매 프레임이 아니라 frame_stride 프레임마다 한 번만 돌리고,
+    그 사이 프레임은 직전 계산값을 그대로 쓴다(carry-forward). stride칸 사이 변위를 쓰므로
+    벡터를 stride로 나눠 "프레임당 평균 이동"으로 맞춘다 — 그 구간 동안 등속 이동이라는
+    가정이 들어가므로, 실제로는 그 안에서 방향이 급히 바뀌면 부정확해진다(shortcut).
     """
+    if type(frame_stride) is not int or frame_stride < 1:
+        raise ValueError("frame_stride must be a positive int")
     cap = cv2.VideoCapture(video_path)
     fps = fps or cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -49,28 +62,33 @@ def compute_zone_motion(video_path: str, zones: list[Zone], fps: float | None = 
 
     rows = []
     frame_idx = 0
+    last_values = {z.name: (None, None, True) for z in zones}  # carry-forward for skipped frames
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         frame_idx += 1
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
-        scene_change = float(np.abs(gray.astype(np.int16) - prev_gray.astype(np.int16)).mean()) > SCENE_CHANGE_DIFF
-        flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        prev_gray = gray
         sec = frame_idx // int(round(fps))
 
-        for name, mask in masks.items():
-            if scene_change:
-                rows.append((sec, name, None, None, True))
-                continue
-            fx = flow[..., 0][mask == 1]
-            fy = flow[..., 1][mask == 1]
-            if fx.size < MIN_VECTORS:
-                rows.append((sec, name, None, None, True))
-                continue
-            rows.append((sec, name, float(fx.mean()), float(fy.mean()), False))
+        if frame_idx % frame_stride == 0:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            scene_change = float(np.abs(gray.astype(np.int16) - prev_gray.astype(np.int16)).mean()) > SCENE_CHANGE_DIFF
+            flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            prev_gray = gray
+
+            for name, mask in masks.items():
+                if scene_change:
+                    last_values[name] = (None, None, True)
+                    continue
+                fx = flow[..., 0][mask == 1]
+                fy = flow[..., 1][mask == 1]
+                if fx.size < MIN_VECTORS:
+                    last_values[name] = (None, None, True)
+                    continue
+                last_values[name] = (float(fx.mean()) / frame_stride, float(fy.mean()) / frame_stride, False)
+
+        for name in masks:
+            rows.append((sec, name, *last_values[name]))
     cap.release()
 
     df = pd.DataFrame(rows, columns=["sec", "zone", "mx", "my", "low_confidence"])

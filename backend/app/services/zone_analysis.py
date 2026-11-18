@@ -166,6 +166,55 @@ def compute_zone_timeseries(
     return out
 
 
+def compute_dwell_times(
+    detections_csv: str,
+    zones: list[Zone],
+    fps: float,
+    min_dwell_frames: int = MIN_DWELL_FRAMES,
+) -> pd.DataFrame:
+    """트랙별 구역 체류 시간(FR-ZON 확장). 반환: columns = [track_id, zone, enter_sec, exit_sec, dwell_s].
+
+    _confirmed_transitions()가 이미 확정한 (frame, from, to) 전환 이벤트를 트랙별로
+    짝지어, 구역에 들어간 시점(to==zone)과 나간 시점(from==zone)의 시간 차를 낸다.
+    영상이 끝날 때까지 구역에 남아있어 "나간" 이벤트가 없는 체류는 끝을 알 수 없어 뺀다.
+    """
+    det = pd.read_csv(detections_csv)
+    det["zone"] = [
+        _zone_of_point(_bottom_center(x1, y1, x2, y2), zones)
+        for x1, y1, x2, y2 in zip(det.x1, det.y1, det.x2, det.y2)
+    ]
+    det["sec"] = det.t_ms // 1000
+
+    rows = []
+    for track_id, g in det.sort_values("frame").groupby("track_id"):
+        frames = g["frame"].tolist()
+        states = g["zone"].tolist()
+        points = list(zip(((g.x1 + g.x2) / 2).tolist(), g.y2.tolist()))
+        if len(frames) < 2:
+            continue
+        events = _confirmed_transitions(frames, states, points, min_dwell_frames)
+
+        open_enter: dict[str, int] = {}
+        if states[0] != OUTSIDE:
+            open_enter[states[0]] = frames[0]
+        for frame, from_zone, to_zone in events:
+            if to_zone != OUTSIDE:
+                open_enter[to_zone] = frame
+            if from_zone != OUTSIDE and from_zone in open_enter:
+                enter_frame = open_enter.pop(from_zone)
+                rows.append(
+                    {
+                        "track_id": track_id,
+                        "zone": from_zone,
+                        "enter_sec": int(enter_frame / fps),
+                        "exit_sec": int(frame / fps),
+                        "dwell_s": round((frame - enter_frame) / fps, 1),
+                    }
+                )
+
+    return pd.DataFrame(rows, columns=["track_id", "zone", "enter_sec", "exit_sec", "dwell_s"])
+
+
 def load_zones_from_json(path: str) -> list[Zone]:
     """configs/zones/*.json 형식({"zones": [{"name", "polygon"}, ...]})에서 Zone 목록을 읽는다."""
     import json

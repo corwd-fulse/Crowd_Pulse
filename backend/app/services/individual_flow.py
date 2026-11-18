@@ -69,6 +69,28 @@ def compute_individual_directions(
     return pd.DataFrame(rows, columns=["frame", "t_ms", "track_id", "angle_deg", "speed_px", "reliable"])
 
 
+def _individual_zone_frames(
+    individual: pd.DataFrame,
+    detections_csv: str,
+    zones: list[Zone],
+    fps: float,
+) -> pd.DataFrame:
+    """개인별 방향(reliable, angle 존재)에 구역·1초 버킷을 붙인 공통 전처리.
+
+    aggregate_by_zone()과 compute_counter_flow()가 같이 쓴다.
+    """
+    det = pd.read_csv(detections_csv)
+    det["zone"] = [
+        _zone_of_point(_bottom_center(x1, y1, x2, y2), zones)
+        for x1, y1, x2, y2 in zip(det.x1, det.y1, det.x2, det.y2)
+    ]
+
+    merged = individual.merge(det[["frame", "track_id", "zone"]], on=["frame", "track_id"], how="left")
+    merged = merged[(merged.zone != OUTSIDE) & merged.reliable & merged.angle_deg.notna()].copy()
+    merged["sec"] = (merged.frame / fps).astype(int)
+    return merged
+
+
 def aggregate_by_zone(
     individual: pd.DataFrame,
     detections_csv: str,
@@ -80,15 +102,7 @@ def aggregate_by_zone(
     optical_flow.compute_zone_motion()의 angle_deg와 같은 구간을 비교해 두 방법이
     서로 맞는지 교차검증하는 데 쓴다.
     """
-    det = pd.read_csv(detections_csv)
-    det["zone"] = [
-        _zone_of_point(_bottom_center(x1, y1, x2, y2), zones)
-        for x1, y1, x2, y2 in zip(det.x1, det.y1, det.x2, det.y2)
-    ]
-
-    merged = individual.merge(det[["frame", "track_id", "zone"]], on=["frame", "track_id"], how="left")
-    merged = merged[(merged.zone != OUTSIDE) & merged.reliable & merged.angle_deg.notna()].copy()
-    merged["sec"] = (merged.frame / fps).astype(int)
+    merged = _individual_zone_frames(individual, detections_csv, zones, fps)
 
     rows = []
     for (sec, zone), g in merged.groupby(["sec", "zone"]):
@@ -97,6 +111,37 @@ def aggregate_by_zone(
         rows.append({"sec": sec, "zone": zone, "mean_angle_deg": mean_angle, "n_tracks": len(g)})
 
     return pd.DataFrame(rows, columns=["sec", "zone", "mean_angle_deg", "n_tracks"])
+
+
+REVERSE_ANGLE_THRESHOLD_DEG = 135.0  # 스펙 제안값: 주류 방향과의 각도차가 이 값을 넘으면 "역방향"으로 본다
+
+
+def compute_counter_flow(
+    individual: pd.DataFrame,
+    detections_csv: str,
+    zones: list[Zone],
+    fps: float,
+    reverse_threshold_deg: float = REVERSE_ANGLE_THRESHOLD_DEG,
+) -> pd.DataFrame:
+    """구역의 주류 이동 방향(원형 평균) 대비 반대로 가는 사람 비율(FR-ZON 확장).
+
+    반환: columns = [sec, zone, mean_angle_deg, reverse_ratio, n_tracks].
+    표본이 너무 적어(<2명) "주류 방향" 자체가 불안정한 버킷은 reverse_ratio를 NaN으로 둔다.
+    """
+    merged = _individual_zone_frames(individual, detections_csv, zones, fps)
+
+    rows = []
+    for (sec, zone), g in merged.groupby(["sec", "zone"]):
+        rad = np.radians(g.angle_deg.astype(float))
+        mean_angle = float(np.degrees(np.arctan2(np.sin(rad).mean(), np.cos(rad).mean())) % 360)
+        if len(g) < 2:
+            rows.append({"sec": sec, "zone": zone, "mean_angle_deg": mean_angle, "reverse_ratio": float("nan"), "n_tracks": len(g)})
+            continue
+        diff = (g.angle_deg.astype(float) - mean_angle + 180) % 360 - 180  # -180~180
+        reverse_ratio = float((diff.abs() >= reverse_threshold_deg).mean())
+        rows.append({"sec": sec, "zone": zone, "mean_angle_deg": mean_angle, "reverse_ratio": reverse_ratio, "n_tracks": len(g)})
+
+    return pd.DataFrame(rows, columns=["sec", "zone", "mean_angle_deg", "reverse_ratio", "n_tracks"])
 
 
 def draw_direction_arrows(
