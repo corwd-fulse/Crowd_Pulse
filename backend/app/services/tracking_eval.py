@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .zone_analysis import ID_SWITCH_WINDOW, _has_id_switch
+from .zone_analysis import ID_SWITCH_WINDOW, _has_id_switch, read_detections
 
 
-def evaluate_tracking(detections_csv: str) -> dict:
+def evaluate_tracking(detections_csv: str | pd.DataFrame) -> dict:
     """반환: 트랙 생존 길이(프레임)/신뢰도 통계 + ID 스위칭 의심 비율."""
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     if det.empty:
         return {
             "track_count": 0,

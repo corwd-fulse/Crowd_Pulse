@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import pandas as pd
 
+from .zone_analysis import read_detections
+
 GRID_SIZE = 20  # 가로/세로 셀 개수 (스펙 제안값)
 WINDOW_S = 10  # 시간 윈도우 (bottleneck.py/queue_analysis.py와 같은 기본값)
 
 
 def compute_density_heatmap(
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     frame_width: int,
     frame_height: int,
     fps: float,
@@ -25,7 +27,7 @@ def compute_density_heatmap(
     """반환: columns = [window_start, cell_x, cell_y, count]. count는 그 윈도우 동안
     해당 셀에서 관측된 탐지 박스 수를 윈도우 길이(초)로 나눈 "초당 평균 밀도"다.
     """
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     if det.empty:
         return pd.DataFrame(columns=["window_start", "cell_x", "cell_y", "count"])
 

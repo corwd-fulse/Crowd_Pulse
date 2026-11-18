@@ -27,12 +27,14 @@ def run_zone_pipeline(
     detections_csv: str,
     zones: list[Zone],
     out_dir: str,
-    *, analysis_profile: str = 'full',
+    *, analysis_profile: str = 'full', frame_stride: int = 1,
 ) -> dict[str, str]:
     """반환: {결과종류: 저장된 csv 경로}.
 
     video_path: optical_flow 계산에 쓰는 원본 영상(detections.csv 좌표만으론 안 됨).
     detections_csv: tracker.py가 만든 frame,t_ms,track_id,x1,y1,x2,y2,conf 형식 csv.
+    frame_stride: 장시간 FULL 분석에서 Optical Flow 비용을 줄이는 옵션(optical_flow.py 참고).
+    기본값 1은 예전과 100% 동일하게 매 프레임 계산한다. flow.csv의 컬럼 모양은 그대로다.
     """
     if analysis_profile not in ('fast', 'full'):
         raise ValueError('Invalid analysis profile')
@@ -45,7 +47,7 @@ def run_zone_pipeline(
         cap.release()
 
     zone_ts = compute_zone_timeseries(detections_csv, zones, fps=fps)
-    motion_ts = (compute_zone_motion(video_path, zones, fps=fps) if analysis_profile == 'full'
+    motion_ts = (compute_zone_motion(video_path, zones, fps=fps, frame_stride=frame_stride) if analysis_profile == 'full'
                  else pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence']))
     individual = compute_individual_directions(detections_csv)
     individual_zone_agg = aggregate_by_zone(individual, detections_csv, zones, fps=fps)
@@ -82,6 +84,7 @@ def run_extended_zone_pipeline(
     zone_timeseries: pd.DataFrame | None = None,
     motion_timeseries: pd.DataFrame | None = None,
     individual_directions: pd.DataFrame | None = None,
+    frame_stride: int = 1,
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
 
@@ -113,17 +116,22 @@ def run_extended_zone_pipeline(
     finally:
         cap.release()
 
-    dwell = compute_dwell_times(detections_csv, zones, fps=fps)
-    individual = individual_directions if individual_directions is not None else compute_individual_directions(detections_csv)
-    counter_flow = compute_counter_flow(individual, detections_csv, zones, fps=fps)
+    # detections.csv를 한 번만 읽어 아래 네 함수 모두에 DataFrame으로 넘긴다 — 안 그러면
+    # dwell/counter_flow/density_heatmap/tracking_quality가 각자 같은 파일을 다시 파싱한다
+    # (장시간 영상일수록 그 비용이 커지는, Optical Flow 이중계산과 같은 종류의 비효율).
+    det = pd.read_csv(detections_csv)
 
-    zone_ts = zone_timeseries if zone_timeseries is not None else compute_zone_timeseries(detections_csv, zones, fps=fps)
-    motion_ts = motion_timeseries if motion_timeseries is not None else compute_zone_motion(video_path, zones, fps=fps)
+    dwell = compute_dwell_times(det, zones, fps=fps)
+    individual = individual_directions if individual_directions is not None else compute_individual_directions(det)
+    counter_flow = compute_counter_flow(individual, det, zones, fps=fps)
+
+    zone_ts = zone_timeseries if zone_timeseries is not None else compute_zone_timeseries(det, zones, fps=fps)
+    motion_ts = motion_timeseries if motion_timeseries is not None else compute_zone_motion(video_path, zones, fps=fps, frame_stride=frame_stride)
     merged = zone_ts.merge(motion_ts[["sec", "zone", "motion"]], on=["sec", "zone"], how="left")
     queue_scores = compute_queue_scores(merged)
 
-    heatmap = compute_density_heatmap(detections_csv, width, height, fps=fps)
-    tracking_quality = evaluate_tracking(detections_csv)
+    heatmap = compute_density_heatmap(det, width, height, fps=fps)
+    tracking_quality = evaluate_tracking(det)
 
     paths = {
         "dwell_times": out / "dwell_times.csv",

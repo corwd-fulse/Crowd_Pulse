@@ -14,6 +14,19 @@ import pandas as pd
 
 MIN_DWELL_FRAMES = 3  # 경계 떨림으로 인한 중복 유입/유출 방지 (스펙 제안값)
 
+
+def read_detections(source: str | pd.DataFrame) -> pd.DataFrame:
+    """detections_csv 경로 또는 이미 읽어둔 DataFrame을 받아 DataFrame을 반환한다.
+
+    run_extended_zone_pipeline()이 dwell/counter_flow/density_heatmap/tracking_quality를
+    전부 같은 detections.csv에서 뽑는데, 각 함수가 따로 pd.read_csv를 부르면 긴 영상일수록
+    같은 파일을 여러 번 파싱하게 된다(모션 이중계산과 같은 종류의 비효율). 이미 읽은
+    DataFrame을 넘기면 재파싱을 건너뛴다 — 넘기지 않으면(기존 호출자) 그냥 한 번 읽는다.
+    DataFrame을 받은 경우 복사본을 반환해 호출자가 추가한 컬럼(zone, sec 등)이 다른
+    호출자의 df를 오염시키지 않게 한다.
+    """
+    return source.copy() if isinstance(source, pd.DataFrame) else pd.read_csv(source)
+
 # 체류 프레임 조건을 만족해도, 후보 상태가 시작된 지점부터 confirmation 지점까지
 # 실제로 이 거리(px) 이상 움직이지 않으면 "진짜 횡단"으로 보지 않는다. 경계선
 # 바로 위에 서 있는 사람의 박스 떨림이 체류 프레임 필터를 통과해버리는 걸 막는다.
@@ -112,13 +125,13 @@ def _confirmed_transitions(
 
 
 def compute_zone_timeseries(
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     zones: list[Zone],
     fps: float,
     min_dwell_frames: int = MIN_DWELL_FRAMES,
 ) -> pd.DataFrame:
     """반환: columns = [sec, zone, count, inflow, outflow]. tracker 데이터가 없으면 inflow/outflow는 NaN."""
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     zone_names = [z.name for z in zones]
 
     det["zone"] = [
@@ -167,7 +180,7 @@ def compute_zone_timeseries(
 
 
 def compute_dwell_times(
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     zones: list[Zone],
     fps: float,
     min_dwell_frames: int = MIN_DWELL_FRAMES,
@@ -178,7 +191,7 @@ def compute_dwell_times(
     짝지어, 구역에 들어간 시점(to==zone)과 나간 시점(from==zone)의 시간 차를 낸다.
     영상이 끝날 때까지 구역에 남아있어 "나간" 이벤트가 없는 체류는 끝을 알 수 없어 뺀다.
     """
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     det["zone"] = [
         _zone_of_point(_bottom_center(x1, y1, x2, y2), zones)
         for x1, y1, x2, y2 in zip(det.x1, det.y1, det.x2, det.y2)

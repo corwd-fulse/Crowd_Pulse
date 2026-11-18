@@ -88,3 +88,27 @@ def test_extended_pipeline_reuses_precomputed_frames_without_recomputing(tmp_pat
         zone_timeseries=zone_ts, motion_timeseries=motion_ts, individual_directions=individual,
     )
     assert set(paths) == {"dwell_times", "counter_flow", "queue_scores", "density_heatmap", "tracking_quality"}
+
+
+def test_extended_pipeline_reads_detections_csv_only_once(tmp_path, monkeypatch):
+    # dwell/counter_flow/density_heatmap/tracking_quality가 각자 pd.read_csv를 부르면
+    # 같은 detections.csv를 네 번 다시 파싱하게 된다 — 긴 영상일수록 낭비가 커지는 문제.
+    video_path = tmp_path / "v.mp4"
+    _write_video(video_path)
+    zone = Zone("A", [(0, 0), (120, 0), (120, 120), (0, 120)])
+    rows = [[f, f * 100, 1, 10 + f, 10, 20 + f, 20, 0.9] for f in range(10)]
+    det_path = tmp_path / "det.csv"
+    _write_detections(det_path, rows)
+
+    reads = []
+    real_read_csv = pd.read_csv
+
+    def counting_read_csv(source, *a, **k):
+        if str(source) == str(det_path):
+            reads.append(source)
+        return real_read_csv(source, *a, **k)
+
+    monkeypatch.setattr(pipeline_module.pd, "read_csv", counting_read_csv)
+
+    run_extended_zone_pipeline(str(video_path), str(det_path), [zone], str(tmp_path / "out"))
+    assert len(reads) == 1

@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from .zone_analysis import OUTSIDE, Zone, _bottom_center, _has_id_switch, _zone_of_point
+from .zone_analysis import OUTSIDE, Zone, _bottom_center, _has_id_switch, _zone_of_point, read_detections
 
 # 화살표 길이를 속도(px)에 비례시킬 때 쓰는 배율/최소·최대 길이(px). 거의 안 움직이는
 # 사람도 구분은 되게 최소 길이를 주고, 너무 길어져 화면을 덮지 않게 상한을 둔다.
@@ -27,14 +27,14 @@ DEFAULT_WINDOW_FRAMES = 5
 
 
 def compute_individual_directions(
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     window_frames: int = DEFAULT_WINDOW_FRAMES,
 ) -> pd.DataFrame:
     """반환: columns = [frame, t_ms, track_id, angle_deg, speed_px, reliable].
 
     reliable=False인 행은 ID 스위칭 의심 구간이라 angle_deg/speed_px가 None이다.
     """
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     rows = []
 
     for tid, g in det.sort_values("frame").groupby("track_id"):
@@ -71,7 +71,7 @@ def compute_individual_directions(
 
 def _individual_zone_frames(
     individual: pd.DataFrame,
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     zones: list[Zone],
     fps: float,
 ) -> pd.DataFrame:
@@ -79,7 +79,7 @@ def _individual_zone_frames(
 
     aggregate_by_zone()과 compute_counter_flow()가 같이 쓴다.
     """
-    det = pd.read_csv(detections_csv)
+    det = read_detections(detections_csv)
     det["zone"] = [
         _zone_of_point(_bottom_center(x1, y1, x2, y2), zones)
         for x1, y1, x2, y2 in zip(det.x1, det.y1, det.x2, det.y2)
@@ -93,7 +93,7 @@ def _individual_zone_frames(
 
 def aggregate_by_zone(
     individual: pd.DataFrame,
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     zones: list[Zone],
     fps: float,
 ) -> pd.DataFrame:
@@ -118,7 +118,7 @@ REVERSE_ANGLE_THRESHOLD_DEG = 135.0  # 스펙 제안값: 주류 방향과의 각
 
 def compute_counter_flow(
     individual: pd.DataFrame,
-    detections_csv: str,
+    detections_csv: str | pd.DataFrame,
     zones: list[Zone],
     fps: float,
     reverse_threshold_deg: float = REVERSE_ANGLE_THRESHOLD_DEG,
