@@ -7,7 +7,7 @@ from app.services import vision_extended_results as extended_storage
 from app.services import vision_results
 from app.services.vision_extended_csv import InvalidExtendedResult
 from app.services.vision_results import JobNotFound, ResultConflict
-from test_vision_results import bundle as bundle, seeded as seeded, client as client
+from test_vision_results import bundle as bundle, seeded as seeded
 
 CONTENTS = {
     'dwell_times': 'track_id,zone,enter_sec,exit_sec,dwell_s\n1,near,0,2,2.0\n',

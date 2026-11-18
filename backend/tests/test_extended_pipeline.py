@@ -4,7 +4,6 @@ import json
 import cv2
 import numpy as np
 import pandas as pd
-import pytest
 
 from app.services import pipeline as pipeline_module
 from app.services.pipeline import run_extended_zone_pipeline

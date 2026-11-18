@@ -11,8 +11,6 @@ optical_flow.py/individual_flow.py는 픽셀 단위까지만 내고 "m/s로는 �
 
 from __future__ import annotations
 
-import json
-
 import pandas as pd
 
 PixelsPerMeter = float | dict[str, float]
@@ -22,13 +20,6 @@ def _ratio_for_zone(pixels_per_meter: PixelsPerMeter, zone: str) -> float | None
     if isinstance(pixels_per_meter, dict):
         return pixels_per_meter.get(zone)
     return pixels_per_meter
-
-
-def load_calibration_from_json(path: str) -> dict[str, float]:
-    """configs/zones/*_calibration.json 형식({"zones": [{"name", "pixels_per_meter"}, ...]})."""
-    with open(path) as f:
-        data = json.load(f)
-    return {z["name"]: float(z["pixels_per_meter"]) for z in data["zones"]}
 
 
 def compute_zone_speed(motion: pd.DataFrame, fps: float, pixels_per_meter: PixelsPerMeter) -> pd.DataFrame:
