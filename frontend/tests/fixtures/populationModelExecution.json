@@ -1,0 +1,71 @@
+{
+  "kind": "administrative_population_estimate_forecast",
+  "timezone": "Asia/Seoul",
+  "horizon_hours": 1,
+  "manifest_sha256": "83a1b87d3dad78b719fb248eed55268f60e20bc0b94e2316a2d8c4c35bc3b32d",
+  "items": [
+    {
+      "area_id": "11110515",
+      "model": "lightgbm",
+      "model_version": "lightgbm-1h-v1",
+      "last_observed_at": "2026-10-08T00:00:00+09:00",
+      "target_at": "2026-10-08T01:00:00+09:00",
+      "current_value": 17984.137964161768,
+      "value": 18251.0,
+      "target_actual": null,
+      "status": "ok",
+      "change": 266.9,
+      "change_percent": 1.48
+    },
+    {
+      "area_id": "11110515",
+      "model": "lstm",
+      "model_version": "lstm-1h-36ep-seed0",
+      "last_observed_at": "2026-10-08T00:00:00+09:00",
+      "target_at": "2026-10-08T01:00:00+09:00",
+      "current_value": 17984.137964161768,
+      "value": 18058.0,
+      "target_actual": null,
+      "status": "ok",
+      "change": 73.9,
+      "change_percent": 0.41
+    }
+  ],
+  "info": {
+    "input_files": 1,
+    "input_rows": 72163,
+    "observed_from": "2026-10-01 00:00:00",
+    "observed_to": "2026-10-08 00:00:00",
+    "areas_in_input": 427,
+    "imputed_cells": 0,
+    "still_missing_cells": 0,
+    "targets_from": "2026-10-08 01:00:00",
+    "targets_to": "2026-10-08 01:00:00",
+    "n_targets": 1,
+    "rows": 854,
+    "status_counts": {
+      "lightgbm": {
+        "ok": 427
+      },
+      "lstm": {
+        "ok": 427
+      }
+    },
+    "model_versions": {
+      "lightgbm": "lightgbm-1h-v1",
+      "lstm": "lstm-1h-36ep-seed0"
+    },
+    "input_is_live": false,
+    "source": "user_supplied_history",
+    "inference_seconds": 2.442414400000416,
+    "predictor_cache": {
+      "hits": 0,
+      "misses": 1,
+      "maxsize": 4,
+      "currsize": 1
+    },
+    "comparison": "\ub9c8\uc9c0\ub9c9 \uc785\ub825 \uc0dd\ud65c\uc778\uad6c \ucd94\uc815\uce58\uc640 1\uc2dc\uac04 \ud6c4 \uc608\uce21 \ube44\uad50. \ud604\uc7ac \ud604\uc7a5 \uc2e4\uce21\uc774\ub098 \uc601\uc0c1 ROI \uc778\uc6d0\uc774 \uc544\ub2d9\ub2c8\ub2e4.",
+    "fixture_input_kind": "SYNTHETIC_INTERFACE_ONLY_REAL_FROZEN_MODEL_EXECUTION"
+  },
+  "cache_hit": false
+}

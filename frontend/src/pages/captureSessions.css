@@ -1,0 +1,10 @@
+.capture-workspace {min-width:0;max-width:100%;}
+.capture-workspace label {display:flex;flex-direction:column;gap:.4rem;min-width:0;}
+.capture-workspace label:has(input[type="checkbox"]) {flex-direction:row;align-items:center;}
+.capture-workspace input:not([type="checkbox"]),.capture-workspace select {max-width:100%;min-width:0;}
+.capture-workspace fieldset {min-inline-size:0;}
+.capture-workspace button {border:1px solid #42546e;border-radius:.35rem;padding:.5rem .8rem;background:#15243c;}
+.capture-workspace button:hover:not(:disabled) {background:#203957;}
+.capture-workspace button:disabled {opacity:.45;cursor:not-allowed;}
+.capture-workspace input[type="datetime-local"] {color-scheme:dark;}
+.capture-workspace video {aspect-ratio:16/9;background:#050b15;}

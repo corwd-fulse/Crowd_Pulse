@@ -20,6 +20,7 @@ coverage/
 __pycache__/
 *.py[cod]
 .venv/
+.venv-forecast/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -65,3 +66,6 @@ forecast/lgbm_*.txt
 forecast/lstm_1h_v*.pt
 forecast/__pycache__/
 backend/models/
+
+# Optional portable media tools; no Python environment changes
+/.tools/

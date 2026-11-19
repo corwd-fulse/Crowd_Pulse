@@ -29,6 +29,8 @@ def compute_zone_motion(
     zones: list[Zone],
     fps: float | None = None,
     frame_stride: int = 1,
+    *,
+    flow_method: str = 'full_frame',
 ) -> pd.DataFrame:
     """반환: columns = [sec, zone, angle_deg, magnitude_px, motion, low_confidence].
 
@@ -45,6 +47,11 @@ def compute_zone_motion(
     """
     if type(frame_stride) is not int or frame_stride < 1:
         raise ValueError("frame_stride must be a positive int")
+    if flow_method not in ('full_frame', 'roi_crop_128'):
+        raise ValueError('Invalid flow method')
+    columns = ["sec", "zone", "angle_deg", "magnitude_px", "motion", "low_confidence"]
+    if not zones:
+        return pd.DataFrame(columns=columns)
     cap = cv2.VideoCapture(video_path)
     fps = fps or cap.get(cv2.CAP_PROP_FPS) or 30.0
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -52,6 +59,14 @@ def compute_zone_motion(
     diag = (w**2 + h**2) ** 0.5  # shortcut: motion 정규화 기준 = 프레임 대각선 길이 (카메라 보정 전 임시 기준)
 
     masks = {z.name: _zone_mask(z, (h, w)) for z in zones}
+    x0, y0, x1, y1 = 0, 0, w, h
+    if flow_method == 'roi_crop_128':
+        points = np.concatenate([np.asarray(z.polygon) for z in zones])
+        x0, y0 = np.maximum(np.floor(points.min(axis=0)).astype(int) - 128, 0)
+        x1, y1 = np.minimum(np.ceil(points.max(axis=0)).astype(int) + 129, [w, h])
+        x0, y0 = min(int(x0), w), min(int(y0), h)
+        x1, y1 = max(int(x1), x0), max(int(y1), y0)
+        masks = {name: mask[y0:y1, x0:x1] for name, mask in masks.items()}
 
     ok, prev = cap.read()
     columns = ["sec", "zone", "angle_deg", "magnitude_px", "motion", "low_confidence"]
@@ -73,11 +88,14 @@ def compute_zone_motion(
         if frame_idx % frame_stride == 0:
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             scene_change = float(np.abs(gray.astype(np.int16) - prev_gray.astype(np.int16)).mean()) > SCENE_CHANGE_DIFF
-            flow = cv2.calcOpticalFlowFarneback(prev_gray, gray, None, 0.5, 3, 15, 3, 5, 1.2, 0)
+            # Scene-change check intentionally stays in original image coordinates.
+            flow = (cv2.calcOpticalFlowFarneback(prev_gray[y0:y1, x0:x1], gray[y0:y1, x0:x1],
+                                                None, 0.5, 3, 15, 3, 5, 1.2, 0)
+                    if x1 > x0 and y1 > y0 else None)
             prev_gray = gray
 
             for name, mask in masks.items():
-                if scene_change:
+                if scene_change or flow is None:
                     last_values[name] = (None, None, True)
                     continue
                 fx = flow[..., 0][mask == 1]
@@ -91,7 +109,13 @@ def compute_zone_motion(
             rows.append((sec, name, *last_values[name]))
     cap.release()
 
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
     df = pd.DataFrame(rows, columns=["sec", "zone", "mx", "my", "low_confidence"])
+    # An entirely unavailable clip otherwise infers object columns from None;
+    # numpy sqrt then raises instead of returning low-confidence missing Flow.
+    df[["mx", "my"]] = df[["mx", "my"]].astype(float)
     agg = (
         df.groupby(["sec", "zone"], as_index=False)
         .agg(mx=("mx", "mean"), my=("my", "mean"), low_confidence=("low_confidence", "any"))

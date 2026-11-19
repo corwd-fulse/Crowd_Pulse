@@ -11,7 +11,7 @@ class DetectionUnavailable(Exception):
     pass
 
 
-def for_job(job, result):
+def tracking_path(job, result):
     if job.status != 'succeeded' or result is None or job.worker_token is None:
         raise DetectionUnavailable('Job has no completed tracking run')
     root = (storage.BASE_DIR / 'uploads/analysis' / str(job.id)).resolve()
@@ -36,7 +36,11 @@ def for_job(job, result):
             raise ValueError('Tracking execution metadata could not be read') from None
     if len(matches) != 1:
         raise DetectionUnavailable('Matching tracking file or execution metadata unavailable')
-    path = matches[0]
+    return matches[0]
+
+
+def for_job(job, result):
+    path = tracking_path(job,result)
     fps = float(result.execution_snapshot['fps'])
     count = int(result.execution_snapshot['frame_count'])
     if not math.isfinite(fps) or fps <= 0 or count <= 0 or count > 500_000:

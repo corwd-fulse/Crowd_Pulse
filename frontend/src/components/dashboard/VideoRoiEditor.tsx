@@ -2,9 +2,9 @@ import {useEffect, useRef, useState} from 'react';
 import axios from 'axios';
 import DetectionOverlay from './DetectionOverlay';
 import VideoZoneCounts from './VideoZoneCounts';
-import {api, getVideoRoi, registerVideoRoi} from '../../services/api';
+import {api, getVideoRoi, registerVideoRoi, saveVideoRoiRevision} from '../../services/api';
 import type {RoiSnapshot} from '../../services/api';
-import {screenToVideo, validateZones} from '../../services/roiGeometry';
+import {screenToVideo, validateZones, nextZoneName} from '../../services/roiGeometry';
 import type {Point, Zone} from '../../services/roiGeometry';
 
 export interface RoiReadiness {videoId: string; production: boolean; test: boolean}
@@ -18,10 +18,11 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
   const [showDetections,setShowDetections]=useState(true);
   const [source,setSource]=useState<RoiSnapshot|null|undefined>(undefined);
   const [zones,setZones]=useState<Zone[]>([]);
+  const [fingerprint,setFingerprint]=useState<string|null>(null);
   const [resolution,setResolution]=useState<Point>([0,0]);
   const [selected,setSelected]=useState<number|null>(null);
   const [points,setPoints]=useState<Point[]>([]);
-  const [name,setName]=useState('');
+  const [name,setName]=useState('A');
   const [dirty,setDirty]=useState(false);
   const [preview,setPreview]=useState(false);
   const [saving,setSaving]=useState(false);
@@ -54,6 +55,7 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
     getVideoRoi(videoId,controller.signal).then(result=>{
       if(controller.signal.aborted) return;
       setSource(result?.roi_snapshot??null);setZones(structuredClone(result?.roi_snapshot.zones??[]));
+      setFingerprint(result?.fingerprint??null);
       setSelected(result?.roi_snapshot.zones.length?0:null);setDirty(false);setPoints([]);setError('');setDrawError('');
     }).catch(()=>{if(!controller.signal.aborted) setError('ROI 조회에 실패했습니다. 다시 조회하세요.');});
     return ()=>controller.abort();
@@ -62,23 +64,33 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
   const mismatch=!!source&&(source.video_resolution[0]!==resolution[0]||source.video_resolution[1]!==resolution[1]);
   const ready=!!source&&!dirty&&!points.length&&!errors.length&&!mismatch&&!saving;
   useEffect(()=>onReadiness({videoId,production:ready&&source?.status==='approved'&&source.approved_for_analysis===true,test:ready}),[videoId,ready,source,onReadiness]);
-  const candidate:RoiSnapshot={...(source??{}),status:'candidate',approved_for_analysis:false,video_resolution:resolution,zones:zones.map(z=>({...z,name:z.name.trim()}))};
+  const candidate:RoiSnapshot={...(source??{}),schema_version:2,overlap_policy:'reject',gap_policy:'outside',status:'candidate',approved_for_analysis:false,video_resolution:resolution,zones:zones.map(z=>({...z,name:z.name.trim()}))};
   function changed(next:Zone[]) {setZones(next);setDirty(true);setMessage('');setError('');setDrawError('');}
   function finish() {
     const next=[...zones,{name:name.trim(),polygon:points}];
     const problems=validateZones(next,resolution);
     if(problems.length) {setDrawError(problems.join(' '));return;}
-    changed(next);setSelected(next.length-1);setPoints([]);setName('');
+    changed(next);setSelected(next.length-1);setPoints([]);setName(nextZoneName(next));
   }
   async function save() {
     if(saveLock.current||source!==null||errors.length||points.length||!preview) return;
     saveLock.current=true;setSaving(true);setError('');setMessage('');
     try {
       const result=await registerVideoRoi(videoId,candidate);
-      setSource(result.roi_snapshot);setDirty(false);setMessage('후보 ROI를 저장했습니다. 운영 승인은 별도 절차가 필요합니다.');
+      setSource(result.roi_snapshot);setZones(structuredClone(result.roi_snapshot.zones));setFingerprint(result.fingerprint??null);setDirty(false);setMessage('후보 ROI를 저장했습니다. 운영 승인은 별도 절차가 필요합니다.');
     } catch(e) {
       setError(axios.isAxiosError(e)&&e.response?.status===412?'이미 ROI가 등록되었습니다. 덮어쓰지 않았습니다. 다시 조회하세요.':'ROI 저장에 실패했습니다. 연결 상태를 확인하세요.');
     } finally {saveLock.current=false;setSaving(false);}
+  }
+  async function saveRevision() {
+    if(saveLock.current||!source||!fingerprint||errors.length||points.length||!preview||!dirty)return;
+    saveLock.current=true;setSaving(true);setError('');
+    try {
+      const result=await saveVideoRoiRevision(videoId,candidate,fingerprint);
+      setSource(result.roi_snapshot);setZones(structuredClone(result.roi_snapshot.zones));setFingerprint(result.fingerprint??null);setDirty(false);
+      setMessage(`후보 ROI 새 버전 ${result.revision} 저장 완료. 이전 설정과 분석 스냅샷은 보존됩니다.`);
+    } catch(e) {setError(axios.isAxiosError(e)&&e.response?.status===412?'다른 편집이 저장되었습니다. 다시 조회한 뒤 편집하세요.':'새 버전 저장에 실패했습니다. 좌표·영상 해상도와 서버 연결을 확인하세요.');}
+    finally {saveLock.current=false;setSaving(false);}
   }
   function exportDraft() {
     const url=URL.createObjectURL(new Blob([JSON.stringify(candidate,null,2)],{type:'application/json'}));
@@ -89,7 +101,7 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
     <div className="space-y-2 border-b border-line p-5"><h2 className="text-sm font-semibold text-ink">영상 구역(ROI) 설정</h2>
       <p className="text-xs text-muted">원본 해상도 {resolution[0]||'—'} × {resolution[1]||'—'} · {roiUnavailable?(error?'ROI 조회 실패 — 편집 불가':'ROI 확인 중'):source===null?'서버 ROI 미등록 — 미저장 초안':dirty?'미승인 후보 초안':source?.approved_for_analysis&&source.status==='approved'?'승인 ROI':'서버에 저장된 미승인 후보 ROI'}{dirty?' · 저장되지 않은 초안':''}</p>
       <p className="text-xs text-muted">편집 모드에서 클릭·터치로 꼭짓점을 추가하고 완료 버튼 또는 더블클릭으로 확정하세요. 구역을 선택하면 꼭짓점을 드래그할 수 있습니다. 미리보기 모드에서는 영상을 재생해 구역을 확인하세요.</p>
-      {source&&<p className="text-xs text-warn">기존 ROI는 보존합니다. 수정·삭제한 초안은 JSON으로 내보낼 수 있습니다. 새 버전 저장 및 승인 API는 아직 없습니다.</p>}
+      <p className="text-xs text-warn">구역 겹침·경계 접촉은 허용하지 않으며 빈 공간은 구역 밖으로 처리합니다. 표시 끄기는 분석 제외가 아닙니다. 수정은 새 후보 버전으로 저장하며 기존 분석의 구역은 바뀌지 않습니다.</p>
     </div>
     <div className="flex flex-wrap items-center gap-4 border-b border-line px-5 py-3 text-xs text-ink-soft">
       <label><input type="checkbox" checked={showOriginal} onChange={e=>setShowOriginal(e.target.checked)}/> 원본 영상</label>
@@ -106,9 +118,9 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
           onPointerMove={e=>{const d=drag.current;if(!d||d.pointer!==e.pointerId||preview||saving)return;const p=screenToVideo(e.clientX,e.clientY,e.currentTarget.getBoundingClientRect(),resolution);if(p)changed(zones.map((z,i)=>i===d.zone?{...z,polygon:z.polygon.map((v,k)=>k===d.vertex?p:v)}:z));}}
           onPointerUp={e=>{if(drag.current?.pointer===e.pointerId){drag.current=null;e.currentTarget.releasePointerCapture(e.pointerId);}}}
           onPointerCancel={()=>{drag.current=null;}}>
-          {zones.map((z,i)=><g key={i}><polygon points={z.polygon.map(p=>p.join(',')).join(' ')} fill={colors[i%colors.length]} fillOpacity={.16} stroke={colors[i%colors.length]} strokeWidth={selected===i?3:2} vectorEffect="non-scaling-stroke" onClick={e=>{if(selected===null)return;e.stopPropagation();if(!disabled&&!preview&&!points.length){setSelected(i);setDrawError('');}}}/><text x={z.polygon[0]?.[0]} y={(z.polygon[0]?.[1]??0)+resolution[0]*.016} fill={colors[i%colors.length]} fontSize={resolution[0]*.017} className="pointer-events-none">{z.name}</text>
+          {zones.map((z,i)=><g key={i} style={{display:preview&&z.visible===false?"none":undefined}}><polygon points={z.polygon.map(p=>p.join(',')).join(' ')} fill={(z.color??colors[i%colors.length])} fillOpacity={.16} stroke={(z.color??colors[i%colors.length])} strokeWidth={selected===i?3:2} vectorEffect="non-scaling-stroke" onClick={e=>{if(selected===null)return;e.stopPropagation();if(!disabled&&!preview&&!points.length){setSelected(i);setDrawError('');}}}/><text x={z.polygon[0]?.[0]} y={(z.polygon[0]?.[1]??0)+resolution[0]*.016} fill={(z.color??colors[i%colors.length])} fontSize={resolution[0]*.017} className="pointer-events-none">{z.name}</text>
             {selected===i&&!preview&&z.polygon.map((p,k)=><circle key={k} aria-label={`${z.name} 꼭짓점 ${k+1}`} cx={p[0]} cy={p[1]} r={22*resolution[0]/(surfaceWidth||resolution[0])} fill="transparent" className="cursor-move" onPointerDown={e=>{if(disabled)return;e.stopPropagation();const position=svg.current&&screenToVideo(e.clientX,e.clientY,svg.current.getBoundingClientRect(),resolution);const vertex=position?z.polygon.reduce((best,p,index)=>Math.hypot(p[0]-position[0],p[1]-position[1])<Math.hypot(z.polygon[best][0]-position[0],z.polygon[best][1]-position[1])?index:best,k):k;drag.current={zone:i,vertex,pointer:e.pointerId};svg.current?.setPointerCapture(e.pointerId);}}><title>드래그로 꼭짓점 이동</title></circle>)}
-            {selected===i&&z.polygon.map((p,k)=><circle key={k} cx={p[0]} cy={p[1]} r={5*resolution[0]/(surfaceWidth||resolution[0])} fill={colors[i%colors.length]} className="pointer-events-none"/>)}</g>)}
+            {selected===i&&z.polygon.map((p,k)=><circle key={k} cx={p[0]} cy={p[1]} r={5*resolution[0]/(surfaceWidth||resolution[0])} fill={(z.color??colors[i%colors.length])} className="pointer-events-none"/>)}</g>)}
           <polyline points={points.map(p=>p.join(',')).join(' ')} fill="none" stroke="#ffffff" strokeWidth={2} vectorEffect="non-scaling-stroke" className="pointer-events-none"/>
           {points.map((p,k)=><circle key={k} cx={p[0]} cy={p[1]} r={5*resolution[0]/(surfaceWidth||resolution[0])} fill="white" className="pointer-events-none"/>)}
         </svg>}
@@ -117,16 +129,17 @@ export default function VideoRoiEditor({videoId,onReadiness,detectionJobId=null,
     </div>
     {!!resolution[0]&&<VideoZoneCounts key={detectionJobId??'none'} jobId={detectionJobId} videoId={videoId} video={video}/>}
     <div className="space-y-4 p-5">
-      <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={disabled||!!points.length} onClick={()=>setPreview(v=>!v)}>{preview?'구역 편집':'저장 전 미리보기'}</button><button type="button" className={button} disabled={disabled||preview||!showRoi||!!points.length} onClick={()=>{setSelected(null);setName(`구역 ${zones.length+1}`);setDrawError('');}}>새 구역 그리기</button><button type="button" className={button} disabled={saving} onClick={()=>{if(!dirty&&!points.length||window.confirm('저장하지 않은 초안을 버리고 다시 조회할까요?')){setSource(undefined);setZones([]);setSelected(null);setPoints([]);setMessage('');setError('');setDrawError('');setReload(v=>v+1);}}}>ROI 다시 조회</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={disabled||!!points.length} onClick={()=>setPreview(v=>!v)}>{preview?'구역 편집':'저장 전 미리보기'}</button><button type="button" className={button} disabled={disabled||preview||!showRoi||!!points.length} onClick={()=>{setSelected(null);setName(nextZoneName(zones));setDrawError('');}}>새 구역 그리기</button><button type="button" className={button} disabled={saving} onClick={()=>{if(!dirty&&!points.length||window.confirm('저장하지 않은 초안을 버리고 다시 조회할까요?')){setSource(undefined);setZones([]);setSelected(null);setPoints([]);setMessage('');setError('');setDrawError('');setReload(v=>v+1);}}}>ROI 다시 조회</button></div>
       {source===undefined&&!error&&<p role="status" className="text-xs text-muted">ROI를 불러오는 중…</p>}
       {!preview&&selected===null&&<div className="flex flex-wrap items-end gap-2"><label className="text-xs text-ink-soft">새 구역 이름<input aria-label="새 구역 이름" maxLength={100} value={name} disabled={disabled} onChange={e=>{setName(e.target.value);setDrawError('');}} className="mt-1 block w-44 rounded-sm border border-line bg-surface p-2"/></label><button type="button" className={button} disabled={disabled||points.length<3} onClick={finish}>폴리곤 완료 ({points.length}점)</button><button type="button" className={button} disabled={!points.length||saving} onClick={()=>{setPoints(p=>p.slice(0,-1));setDrawError('');}}>마지막 점 취소</button><button type="button" className={button} disabled={!points.length||saving} onClick={()=>{setPoints([]);setDrawError('');}}>그리기 취소</button></div>}
       {drawError&&<p ref={drawAlert} tabIndex={-1} role="alert" className="rounded-sm border border-rose-500/40 p-3 text-xs text-danger">{drawError}</p>}
-      <div className="space-y-2">{zones.map((z,i)=><div key={i} className="flex flex-wrap items-center gap-2"><button type="button" className={button} disabled={saving||!!points.length} onClick={()=>{setSelected(i);setPreview(false);}} style={{borderColor:colors[i%colors.length]}}>구역 {i+1} 선택</button><input aria-label={`구역 ${i+1} 이름`} maxLength={100} value={z.name} disabled={disabled||preview} onChange={e=>changed(zones.map((v,k)=>k===i?{...v,name:e.target.value}:v))} className="min-w-0 flex-1 rounded-sm border border-line bg-surface p-2 text-xs text-ink"/><button type="button" className={button} disabled={disabled||preview} onClick={()=>{changed(zones.filter((_,k)=>k!==i));setSelected(null);}}>구역 {i+1} 삭제</button></div>)}</div>
+      <div className="space-y-2">{zones.map((z,i)=><div key={i} className="flex flex-wrap items-center gap-2"><button type="button" className={button} disabled={saving||!!points.length} onClick={()=>{setSelected(i);setPreview(false);}} style={{borderColor:(z.color??colors[i%colors.length])}}>구역 {i+1} 선택</button><input aria-label={`구역 ${i+1} 이름`} maxLength={100} value={z.name} disabled={disabled||preview} onChange={e=>changed(zones.map((v,k)=>k===i?{...v,name:e.target.value}:v))} className="min-w-0 flex-1 rounded-sm border border-line bg-surface p-2 text-xs text-ink"/><label className="text-xs text-muted">색상<input type="color" aria-label={`구역 ${i+1} 색상`} value={z.color??colors[i%colors.length]} disabled={disabled||preview} onChange={e=>changed(zones.map((v,k)=>k===i?{...v,color:e.target.value}:v))}/></label><label className="text-xs text-muted"><input type="checkbox" aria-label={`구역 ${i+1} 표시`} checked={z.visible!==false} disabled={disabled||preview} onChange={e=>changed(zones.map((v,k)=>k===i?{...v,visible:e.target.checked}:v))}/> 표시</label><button type="button" className={button} disabled={disabled||preview} onClick={()=>{changed(zones.filter((_,k)=>k!==i));setSelected(null);}}>구역 {i+1} 삭제</button></div>)}</div>
+      {selected!==null&&zones[selected]&&!preview&&<fieldset className="rounded-sm border border-line p-3"><legend className="text-xs text-muted">선택 구역 원본 픽셀 좌표</legend>{zones[selected].polygon.map((point,k)=><div key={k} className="flex flex-wrap gap-2 py-1">{([0,1] as const).map(axis=><label key={axis} className="text-xs text-muted">{k+1} {axis===0?'X':'Y'}<input type="number" aria-label={`꼭짓점 ${k+1} ${axis===0?'X':'Y'}`} value={point[axis]} min={0} max={resolution[axis]} step="0.01" disabled={disabled} onChange={e=>changed(zones.map((z,i)=>i===selected?{...z,polygon:z.polygon.map((p,j)=>j===k?p.map((n,a)=>a===axis?Number(e.target.value):n) as Point:p)}:z))} className="ml-2 w-24 rounded-sm border border-line bg-surface p-1"/></label>)}</div>)}</fieldset>}
       {mismatch&&<p role="alert" className="text-xs text-danger">기존 ROI 해상도와 원본 영상이 다릅니다. 분석 요청을 차단했습니다.</p>}
       {!!resolution[0]&&errors.length>0&&<ul aria-label="ROI 검증 결과" className="list-inside list-disc text-xs text-warn">{errors.map(e=><li key={e}>{e}</li>)}</ul>}
       {preview&&!errors.length&&<p className="text-xs text-ok">좌표 범위·이름·면적·자기 교차·구역 간 경계 검사를 통과했습니다. 실제 보행 영역과 영상 전체에서의 적합성은 직접 확인하세요.</p>}
       <details className="text-xs text-muted"><summary>원본 좌표 JSON 미리보기</summary><pre className="mt-2 max-h-60 overflow-auto">{JSON.stringify(candidate,null,2)}</pre></details>
-      <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={disabled||source!==null||!!errors.length||!!points.length||!preview} onClick={()=>void save()}>{saving?'저장 중…':'후보 ROI 최초 저장'}</button><button type="button" className={button} disabled={disabled||!!errors.length||!!points.length} onClick={exportDraft}>후보 초안 JSON 내보내기</button></div>
+      <div className="flex flex-wrap gap-2"><button type="button" className={button} disabled={disabled||source!==null||!!errors.length||!!points.length||!preview} onClick={()=>void save()}>{saving?'저장 중…':'후보 ROI 최초 저장'}</button><button type="button" className={button} disabled={disabled||!!errors.length||!!points.length} onClick={exportDraft}>후보 초안 JSON 내보내기</button><button type="button" className={button} disabled={disabled||!source||!fingerprint||!dirty||!!errors.length||!!points.length||!preview} onClick={()=>void saveRevision()}>후보 ROI 새 버전 저장</button></div>
       {message&&<p role="status" className="text-xs text-ok">{message}</p>}{error&&<p role="alert" className="text-xs text-danger">{error}</p>}
     </div>
   </section>;

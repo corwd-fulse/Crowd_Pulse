@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import Video
 import mimetypes
+import subprocess
 
 from fastapi.responses import FileResponse
 
@@ -241,3 +242,30 @@ def stream_video(
         filename=video.filename,
         content_disposition_type="inline",
     )
+
+
+@router.get('/{video_id}/media-info')
+def media_info(video_id:UUID,db:Session=Depends(get_db)):
+    from app.services import playback_media
+    source=Path(stream_video(video_id,db).path)
+    try:
+        return {'video_id':str(video_id),'source':playback_media.probe(source),'playback':playback_media.status(source),
+                'note':'Browser playback is checked by the client; the analysis source remains the original.'}
+    except (ValueError,OSError,subprocess.SubprocessError) as exc:
+        raise HTTPException(503,str(exc)[:500]) from None
+
+
+@router.post('/{video_id}/playback',status_code=202)
+def prepare_playback(video_id:UUID,db:Session=Depends(get_db)):
+    from app.services import playback_media
+    source=Path(stream_video(video_id,db).path)
+    try:return {'video_id':str(video_id),**playback_media.request(source)}
+    except (ValueError,OSError) as exc:raise HTTPException(503,str(exc)[:500]) from None
+
+
+@router.get('/{video_id}/playback/stream')
+def playback_stream(video_id:UUID,db:Session=Depends(get_db)):
+    from app.services import playback_media
+    source=Path(stream_video(video_id,db).path)
+    if playback_media.status(source)['status']!='ready':raise HTTPException(409,'Validated playback copy is not ready')
+    return FileResponse(playback_media.CACHE/(playback_media.key(source)+'.mp4'),media_type='video/mp4',content_disposition_type='inline')

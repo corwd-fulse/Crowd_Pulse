@@ -1,3 +1,4 @@
+import {cachedWindow,pageReady} from './mediaWindowCache';
 import axios from 'axios';
 
 export const api = axios.create({
@@ -87,17 +88,17 @@ export interface RoiSnapshot {
   status: string;
   approved_for_analysis: boolean;
   video_resolution: [number, number];
-  zones: Array<{name: string; polygon: [number, number][]; description?: string}>;
+  zones: Array<{name: string; polygon: [number, number][]; description?: string; color?:string; visible?:boolean}>;
   [key: string]: unknown;
 }
 
 export interface DetectionBox {track_id:number|null;x1:number;y1:number;x2:number;y2:number;confidence:number}
-export interface DetectionFrame {frame:number;t_ms:number;boxes:DetectionBox[]}
+export interface DetectionFrame {frame:number;t_ms:number;boxes:DetectionBox[];observed?:boolean}
 export interface DetectionResult {
-  analysis_job_id:string;video_id:string;fps:number;frame_count:number;video_resolution:[number,number];frames:DetectionFrame[];
+  analysis_job_id:string;video_id:string;fps:number;frame_count:number;video_resolution:[number,number];frames:DetectionFrame[];window?:{start_ms:number;end_ms:number;next_start_ms:number|null};
 }
-export async function getDetections(jobId:string,signal?:AbortSignal):Promise<DetectionResult|null> {
-  try {return (await api.get<DetectionResult>(`/api/analysis/jobs/${encodeURIComponent(jobId)}/detections`,{signal})).data;}
+export async function getDetections(jobId:string,_signal?:AbortSignal,start=0,end=start+5000):Promise<DetectionResult|null> {
+  try {return await cachedWindow(`detections:${jobId}:${start}:${end}`,signal=>pageReady<DetectionResult>(()=>api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/detections`,{signal,params:{start_ms:start,end_ms:end}}),signal));}
   catch(error) {if(axios.isAxiosError(error)&&error.response?.status===404)return null;throw error;}
 }
 
@@ -107,7 +108,8 @@ export interface VisionResultSummary {
   status: string;
   analysis_mode: 'production' | 'test';
   analysis_profile?: 'fast' | 'full';
-  components?: Record<'tracking' | 'observations' | 'individual_directions' | 'optical_flow' | 'bottleneck', 'completed' | 'not_run'>;
+  components?: Record<'tracking' | 'observations' | 'individual_directions' | 'optical_flow' | 'bottleneck', 'completed' | 'not_run' | 'partial' | 'unanalyzed'>;
+  bottleneck_status?: BottleneckWindowStatus[];
   roi_status: 'candidate' | 'approved';
   roi_snapshot: RoiSnapshot;
   video_resolution: [number, number];
@@ -126,7 +128,30 @@ export interface VisionResultSummary {
   units: Record<string, string>;
 }
 
+export interface BottleneckWindowStatus {
+  window_start: number;
+  zone: string;
+  status: 'analyzed' | 'unanalyzed';
+  reason: string | null;
+  reasons?: string[];
+  missing_metrics?: Record<string, number[]>;
+  flow_low_confidence_seconds?: number[];
+  previous_window_start?: number | null;
+  previous_missing_metrics?: Record<string, number[]>;
+}
+
 export interface VisionZoneMetric {
+  hybrid?: {
+    valid_track_count: number;
+    individual_angle_deg: number | null;
+    median_speed_px_per_second: number | null;
+    direction_coherence: number | null;
+    direction_counts: Record<'right' | 'down' | 'left' | 'up', number>;
+    circular_difference_deg: number | null;
+    agreement: number | null;
+    low_confidence: boolean;
+    reason: string;
+  } | null;
   analysis_job_id: string;
   imported_at: string;
   region_key: string;
@@ -176,12 +201,12 @@ export async function getVisionResult(jobId: string, signal?: AbortSignal): Prom
   return (await api.get<VisionResultSummary>(`/api/analysis/jobs/${encodeURIComponent(jobId)}/results`, {signal})).data;
 }
 
-export async function getVisionZoneMetrics(jobId: string, offset = 0, signal?: AbortSignal): Promise<ResultPage<VisionZoneMetric> & {direction_presentation: DirectionPresentation}> {
-  return (await api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/results/zone-metrics`, {params: {limit: 1000, offset}, signal})).data;
+export async function getVisionZoneMetrics(jobId: string, offset = 0, signal?: AbortSignal, range?:{start_ms:number;end_ms:number}): Promise<ResultPage<VisionZoneMetric> & {direction_presentation: DirectionPresentation}> {
+  return (await api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/results/zone-metrics`, {params: {limit: 1000, offset,...range}, signal})).data;
 }
 
-export async function getVisionBottleneckScores(jobId: string, offset = 0, signal?: AbortSignal): Promise<ResultPage<VisionBottleneckScore>> {
-  return (await api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/results/bottleneck-scores`, {params: {limit: 1000, offset}, signal})).data;
+export async function getVisionBottleneckScores(jobId: string, offset = 0, signal?: AbortSignal, range?:{start_ms:number;end_ms:number}): Promise<ResultPage<VisionBottleneckScore>> {
+  return (await api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/results/bottleneck-scores`, {params: {limit: 1000, offset,...range}, signal})).data;
 }
 
 async function allPages<T>(fetchPage: (offset: number) => Promise<ResultPage<T>>): Promise<T[]> {
@@ -196,11 +221,11 @@ async function allPages<T>(fetchPage: (offset: number) => Promise<ResultPage<T>>
   }
 }
 
-export async function getVisionResultBundle(jobId: string, signal?: AbortSignal): Promise<VisionResultBundle> {
+export async function getVisionResultBundle(jobId: string, signal?: AbortSignal, range?:{start_ms:number;end_ms:number}): Promise<VisionResultBundle> {
   const [summary, metrics, scores] = await Promise.all([
     getVisionResult(jobId, signal),
-    allPages((offset) => getVisionZoneMetrics(jobId, offset, signal)),
-    allPages((offset) => getVisionBottleneckScores(jobId, offset, signal)),
+    allPages((offset) => getVisionZoneMetrics(jobId, offset, signal,range)),
+    allPages((offset) => getVisionBottleneckScores(jobId, offset, signal,range)),
   ]);
   if (summary.analysis_job_id !== jobId || [...metrics, ...scores].some((row) => row.analysis_job_id !== jobId)) {
     throw new Error('다른 작업의 결과가 반환되었습니다. 다시 조회하세요.');
@@ -208,8 +233,8 @@ export async function getVisionResultBundle(jobId: string, signal?: AbortSignal)
   return {summary, metrics, scores};
 }
 
-export async function getVisionObservations(jobId:string,signal?:AbortSignal):Promise<Pick<VisionResultBundle,'summary'|'metrics'>> {
-  const [summary,metrics]=await Promise.all([getVisionResult(jobId,signal),allPages(offset=>getVisionZoneMetrics(jobId,offset,signal))]);
+export async function getVisionObservations(jobId:string,signal?:AbortSignal,range?:{start_ms:number;end_ms:number}):Promise<Pick<VisionResultBundle,'summary'|'metrics'>> {
+  const [summary,metrics]=await Promise.all([getVisionResult(jobId,signal),allPages(offset=>getVisionZoneMetrics(jobId,offset,signal,range))]);
   if(summary.analysis_job_id!==jobId||metrics.some(row=>row.analysis_job_id!==jobId))throw new Error('Mismatched observation job');
   return {summary,metrics};
 }
@@ -255,7 +280,7 @@ export async function createAnalysisJob(videoId: string, mode: 'production' | 't
   return response.data;
 }
 
-export interface VideoRoiResponse {video_id: string; roi_snapshot: RoiSnapshot; roi_status?: 'candidate' | 'approved'}
+export interface VideoRoiResponse {video_id: string; roi_snapshot: RoiSnapshot; roi_status?: 'candidate' | 'approved';fingerprint?:string;revision?:number}
 export async function getVideoRoi(videoId: string, signal?: AbortSignal): Promise<VideoRoiResponse | null> {
   try {
     return (await api.get<VideoRoiResponse>(`/api/videos/${encodeURIComponent(videoId)}/roi`, {signal})).data;
@@ -267,6 +292,18 @@ export async function getVideoRoi(videoId: string, signal?: AbortSignal): Promis
 export async function registerVideoRoi(videoId: string, snapshot: RoiSnapshot): Promise<VideoRoiResponse> {
   return (await api.put<VideoRoiResponse>(`/api/videos/${encodeURIComponent(videoId)}/roi`, snapshot,
     {headers: {'If-None-Match': '*'}})).data;
+}
+
+export async function saveVideoRoiRevision(videoId:string,snapshot:RoiSnapshot,fingerprint:string):Promise<VideoRoiResponse> {
+  return (await api.post<VideoRoiResponse>(`/api/videos/${encodeURIComponent(videoId)}/roi-revisions`,snapshot,
+    {headers:{'If-Match':fingerprint}})).data;
+}
+
+export interface ReplayEvent {event_id:string;kind:'boundary'|'zone_path';track_id:number;segment_id:number;from_zone:string;to_zone:string;frame:number;timestamp_ms:number;confidence:number;from_position:[number,number];to_position:[number,number];via_outside:boolean}
+export interface ReplayFrame {frame:number;t_ms:number;observed:boolean;flow_complete:boolean;points:{track_id:number|null;x:number;y:number;zone:string|null;confidence:number}[];zones:{zone:string;count:number|null;inflow:number|null;outflow:number|null;net_inflow:number|null;confirmed_inflow:number;confirmed_outflow:number}[]}
+export interface ReplayResult {window?:{start_ms:number;end_ms:number;next_start_ms:number|null};window_scoped_events?:boolean;route_track_ids?:{from_zone:string;to_zone:string;track_ids:number[]}[];route_prefix_counts?:{from_zone:string;to_zone:string;transitions:number}[];earlier_events?:ReplayEvent[];version:string;analysis_job_id:string;video_id:string;fps:number;frame_count:number;video_resolution:[number,number];roi_snapshot:RoiSnapshot;mode:'observed_replay_not_prediction';frames:ReplayFrame[];events:ReplayEvent[];routes:{from_zone:string;to_zone:string;transitions:number}[];observed_od:{from_zone:string;to_zone:string;tracks:number}[];od_note:string;diagnostics:{frame:number;track_id:number|null;reason:string;resumed_frame?:number}[];coverage:{verified_frame_count:number;complete_frame_index:boolean;incomplete_track_ids:number;unresolved_paths:number}}
+export async function getReplay(jobId:string,_signal?:AbortSignal,start=0,end=start+5000):Promise<ReplayResult> {
+  return cachedWindow(`replay:${jobId}:${start}:${end}`,signal=>pageReady<ReplayResult>(()=>api.get(`/api/analysis/jobs/${encodeURIComponent(jobId)}/replay`,{signal,params:{start_ms:start,end_ms:end}}),signal));
 }
 
 export async function getAnalysisJob(jobId: string, signal?: AbortSignal): Promise<AnalysisJobResponse> {

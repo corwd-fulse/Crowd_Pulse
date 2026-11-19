@@ -22,8 +22,11 @@ def compute_bottleneck_scores(
     timeseries: pd.DataFrame,  # columns: sec, zone, count, inflow, outflow, motion
     window_s: int = WINDOW_S,
     weights: tuple[float, float, float] = WEIGHTS,
+    *, missing_policy: str = 'legacy',
 ) -> pd.DataFrame:
     """반환: columns = [window_start, zone, score, growth, slowdown, imbalance]."""
+    if missing_policy not in ('legacy', 'omit_unavailable_v1'):
+        raise ValueError('Invalid missing policy')
     ts = timeseries.copy()
     ts["window"] = ts["sec"] // window_s * window_s
 
@@ -43,7 +46,15 @@ def compute_bottleneck_scores(
         # slowdown도 같은 문제가 있었다: 이전 motion으로 나누면 motion이 거의 0에 가까운
         # 순간 바로 다음 작은 절대 변화도 비율상 1.0에 가깝게 튄다. 구역의 관측 최대
         # motion을 기준치로 써서 절대 변화량 기준으로 정규화한다.
-        zone_motion_capacity = max(g["motion"].max(skipna=True) or 0.0, 1e-6)
+        maximum_motion = g["motion"].max(skipna=True)
+        zone_motion_capacity = max(0.0 if pd.isna(maximum_motion) else maximum_motion, 1e-6)
+
+        unavailable = set()
+        if missing_policy == 'omit_unavailable_v1':
+            required = ['count', 'motion', 'inflow', 'outflow']
+            for window, part in g.groupby('window'):
+                if any(col not in part or part[col].isna().any() for col in required):
+                    unavailable.add(window)
 
         agg = {"count": "mean", "motion": "mean"}
         if has_flow:
@@ -54,7 +65,13 @@ def compute_bottleneck_scores(
             continue  # 윈도우보다 짧은 영상: 점수 산출 안 함
 
         prev_count = prev_motion = None
+        previous_unavailable = False
         for _, row in g.iterrows():
+            current_unavailable = row['window'] in unavailable
+            if missing_policy == 'omit_unavailable_v1' and (current_unavailable or previous_unavailable):
+                prev_count, prev_motion = row['count'], row.get('motion')
+                previous_unavailable = current_unavailable
+                continue
             growth = 0.0 if prev_count is None else _clip01((row["count"] - prev_count) / zone_capacity)
 
             if prev_motion is None or pd.isna(prev_motion) or pd.isna(row.get("motion")):
@@ -80,6 +97,7 @@ def compute_bottleneck_scores(
                 }
             )
             prev_count, prev_motion = row["count"], row.get("motion")
+            previous_unavailable = current_unavailable
 
     out = pd.DataFrame(rows, columns=["window_start", "zone", "score", "growth", "slowdown", "imbalance"])
     out["risk_level"] = out["score"].apply(_risk_level)

@@ -24,6 +24,27 @@ const load = vi.mocked(getVisionResultBundle);
 beforeEach(() => {load.mockReset(); load.mockResolvedValue(structuredClone(fixture));});
 
 describe('real-result presentation', () => {
+  it('separates hybrid estimates and missing bottleneck from a safe-risk conclusion', async () => {
+    const hybrid = structuredClone(fixture);
+    hybrid.summary.execution_snapshot.settings = {flow_method:'roi_crop_128'};
+    hybrid.summary.components = {tracking:'completed',observations:'completed',individual_directions:'completed',optical_flow:'completed',bottleneck:'unanalyzed'};
+    hybrid.scores=[];
+    hybrid.summary.bottleneck_status=[{window_start:10,zone:'walkway_far',status:'unanalyzed',reason:'low_confidence_flow',
+      reasons:['low_confidence_flow','missing_motion','previous_window_missing_metrics'],
+      flow_low_confidence_seconds:[11],missing_metrics:{motion:[11]},previous_window_start:0,
+      previous_missing_metrics:{motion:[4,6,8,9]}}];
+    hybrid.metrics[0].hybrid={valid_track_count:1,individual_angle_deg:null,median_speed_px_per_second:20,
+      direction_coherence:1,direction_counts:{right:1,down:0,left:0,up:0},circular_difference_deg:null,
+      agreement:null,low_confidence:true,reason:'insufficient_tracks'};
+    load.mockResolvedValue(hybrid);
+    render(<AnalysisResults job={job}/>);
+    await screen.findByText('ROI Crop 128 실험 분석');
+    expect(screen.getByText('low_confidence · 유효 추적 인원 부족')).toBeTruthy();
+    expect(screen.getByText(/필수 지표가 부족한 구간/)).toBeTruthy();
+    expect(screen.getByText('개인 속도 중앙값 (px/s)')).toBeTruthy();
+    expect(screen.getByText(/Optical Flow 신뢰도 낮음: 11초/)).toBeTruthy();
+    expect(screen.getByText(/이전 0초 창 지표 결측: 이동량\(4·6·8·9초\)/)).toBeTruthy();
+  });
   it('shows FAST completion and explicit unanalysed flow/bottleneck while displaying individual estimates', async () => {
     const fast=structuredClone(fixture);
     fast.summary.analysis_profile='fast';fast.scores=[];

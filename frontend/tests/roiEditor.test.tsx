@@ -1,12 +1,27 @@
 import {act,fireEvent,render,screen,waitFor} from '@testing-library/react';
 import {afterEach,beforeEach,expect,it,vi} from 'vitest';
 import VideoRoiEditor from '../src/components/dashboard/VideoRoiEditor';
-import {getVideoRoi,registerVideoRoi} from '../src/services/api';
+import {getVideoRoi,registerVideoRoi,saveVideoRoiRevision} from '../src/services/api';
 import type {RoiSnapshot} from '../src/services/api';
-vi.mock('../src/services/api',async original=>({...await original<typeof import('../src/services/api')>(),getVideoRoi:vi.fn(),registerVideoRoi:vi.fn()}));
+vi.mock('../src/services/api',async original=>({...await original<typeof import('../src/services/api')>(),getVideoRoi:vi.fn(),registerVideoRoi:vi.fn(),saveVideoRoiRevision:vi.fn()}));
 const snapshot:RoiSnapshot={status:'approved',approved_for_analysis:true,video_resolution:[1920,1080],zones:[{name:'saved',polygon:[[10,10],[100,10],[100,100],[10,100]]}]};
 beforeEach(()=>{vi.mocked(getVideoRoi).mockReset().mockResolvedValue(null);vi.mocked(registerVideoRoi).mockReset();});
 afterEach(()=>vi.unstubAllGlobals());
+it('saves color visibility and coordinate edits as a new candidate revision',async()=>{
+  vi.mocked(getVideoRoi).mockResolvedValue({video_id:'video-id',roi_snapshot:snapshot,fingerprint:'original-hash'});
+  vi.mocked(saveVideoRoiRevision).mockImplementation(async(video_id,roi_snapshot)=>({video_id,roi_snapshot,fingerprint:'new-hash',revision:1}));
+  await mount();
+  fireEvent.change(screen.getByLabelText('구역 1 이름'),{target:{value:'A'}});
+  fireEvent.change(screen.getByLabelText('구역 1 색상'),{target:{value:'#ff0000'}});
+  fireEvent.click(screen.getByLabelText('구역 1 표시'));
+  fireEvent.change(screen.getByLabelText('꼭짓점 1 X'),{target:{value:'20'}});
+  fireEvent.click(screen.getByRole('button',{name:'저장 전 미리보기'}));
+  fireEvent.click(screen.getByRole('button',{name:'후보 ROI 새 버전 저장'}));
+  await screen.findByText(/새 버전 1 저장 완료/);
+  expect(saveVideoRoiRevision).toHaveBeenCalledWith('video-id',expect.objectContaining({status:'candidate',approved_for_analysis:false,
+    zones:[expect.objectContaining({name:'A',color:'#ff0000',visible:false,polygon:[[20,10],[100,10],[100,100],[10,100]]})]}),'original-hash');
+  expect(snapshot.zones[0].name).toBe('saved');
+});
 async function mount() {
   const ready=vi.fn();const view=render(<VideoRoiEditor videoId="video-id" onReadiness={ready}/>);
   await waitFor(()=>expect(getVideoRoi).toHaveBeenCalled());
@@ -28,7 +43,7 @@ it('draws in source coordinates, previews and saves only a candidate',async()=>{
   fireEvent.click(screen.getByRole('button',{name:'후보 ROI 최초 저장'}));
   await screen.findByText(/후보 ROI를 저장했습니다/);
   expect(registerVideoRoi).toHaveBeenCalledWith('video-id',expect.objectContaining({status:'candidate',approved_for_analysis:false,zones:[{name:'walkway',polygon:[[100,100],[400,100],[400,400],[100,400]]}]}));
-  expect(ready).toHaveBeenLastCalledWith({videoId:'video-id',production:false,test:true});
+  await waitFor(()=>expect(ready).toHaveBeenLastCalledWith({videoId:'video-id',production:false,test:true}));
 });
 it('edits and deletes existing ROI only in a draft and blocks analysis while dirty',async()=>{
   vi.mocked(getVideoRoi).mockResolvedValue({video_id:'video-id',roi_snapshot:snapshot});

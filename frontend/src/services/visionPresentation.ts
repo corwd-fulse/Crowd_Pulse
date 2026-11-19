@@ -1,7 +1,28 @@
-import type {VisionResultSummary, VisionZoneMetric} from './api';
+import type {BottleneckWindowStatus, VisionResultSummary, VisionZoneMetric} from './api';
 
 export const formatMetric = (value: number | null | undefined) => value == null ? '데이터 없음' : value.toLocaleString('ko-KR', {maximumFractionDigits: 4});
 export const relativeSeconds = (milliseconds: number) => `${formatMetric(milliseconds / 1000)}초`;
+
+export function bottleneckReason(row: BottleneckWindowStatus): string {
+  const labels: Record<string, string> = {count:'인원', motion:'이동량', inflow:'유입', outflow:'유출'};
+  const messages: string[] = [];
+  const reasons = row.reasons ?? (row.reason ? [row.reason] : []);
+  if (reasons.includes('fast_not_run')) return 'FAST에서 실행하지 않음';
+  if (reasons.includes('insufficient_windows')) messages.push('비교할 시간창 부족');
+  const low = row.flow_low_confidence_seconds ?? [];
+  if (low.length) messages.push(`Optical Flow 신뢰도 낮음: ${low.join('·')}초`);
+  for (const [key, seconds] of Object.entries(row.missing_metrics ?? {})) {
+    if (seconds.length && !(key === 'motion' && low.length === seconds.length && seconds.every(sec => low.includes(sec)))) {
+      messages.push(`${labels[key] ?? key} 결측: ${seconds.join('·')}초`);
+    }
+  }
+  if (reasons.includes('previous_window_missing_metrics')) {
+    const missing = Object.entries(row.previous_missing_metrics ?? {}).filter(([, secs]) => secs.length)
+      .map(([key, secs]) => `${labels[key] ?? key}(${secs.join('·')}초)`).join(', ');
+    messages.push(`이전 ${row.previous_window_start ?? '?'}초 창 지표 결측${missing ? `: ${missing}` : ''}`);
+  }
+  return messages.join(' / ') || '시간창 또는 필수 지표 부족 (상세 기록 없음)';
+}
 
 export function directionLabel(summary: VisionResultSummary, row: VisionZoneMetric, kind: 'flow' | 'individual'): string {
   if (kind === 'flow' && summary.analysis_profile === 'fast') return '미분석 (FAST)';
