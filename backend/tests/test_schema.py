@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timedelta, timezone
 from io import StringIO
 from uuid import uuid4
@@ -61,6 +62,10 @@ def test_offline_migration_is_additive_and_has_hypertable_ddl():
     assert sql.count("SELECT CREATE_HYPERTABLE(") == 4
     assert "BY_RANGE('ANALYZED_AT'" in sql
     assert "BY_RANGE('PREDICTED_AT'" in sql
+    # Alembic itself emits a DELETE on its own bookkeeping table at a merge point
+    # (two heads collapsing into one). That is not a data change, so drop only those
+    # statements before checking that the migrations stay additive.
+    sql = re.sub(r"DELETE FROM (PUBLIC\.)?ALEMBIC_VERSION\b[^;]*;", "", sql)
     for forbidden in ["DROP TABLE", "TRUNCATE", "CREATE EXTENSION", "ALTER SYSTEM", "DELETE FROM"]:
         assert forbidden not in sql
 

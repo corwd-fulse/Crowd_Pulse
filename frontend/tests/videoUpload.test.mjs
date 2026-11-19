@@ -15,11 +15,11 @@ test('backend extensions are accepted regardless of case or browser MIME type', 
   }
 });
 
-test('200MiB boundary matches backend, including its acceptance of empty files', () => {
+test('300MiB boundary matches backend, including its acceptance of empty files', () => {
   for (const size of [0, MAX_VIDEO_SIZE - 1, MAX_VIDEO_SIZE]) {
     assert.equal(validateVideo({name: 'clip.mp4', size}), null);
   }
-  assert.match(validateVideo({name: 'clip.mp4', size: MAX_VIDEO_SIZE + 1}), /200MiB/);
+  assert.match(validateVideo({name: 'clip.mp4', size: MAX_VIDEO_SIZE + 1}), /300MiB/);
 });
 
 // Load the Vite module under Node without needing a browser or live upload server.
