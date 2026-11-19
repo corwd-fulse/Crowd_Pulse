@@ -8,3 +8,4 @@ alembic>=1.14,<2
 ultralytics
 opencv-python-headless
 pandas
+lap>=0.5.12

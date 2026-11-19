@@ -1,0 +1,78 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: crowd-pulse-db
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "5432:5432"
+    volumes:
+      - crowd-pulse-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    # 최초 기동 시에만 적용된다. 이미 만들어진 볼륨에는 extension이 없으면 backend가
+    # alembic upgrade에서 멈추니, 처음 띄울 때 한 번 수동으로 활성화해야 한다(README 참고).
+
+  backend:
+    build: ./backend
+    container_name: crowd-pulse-backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      ALLOW_TEST_ANALYSIS: ${ALLOW_TEST_ANALYSIS:-true}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+
+  frontend:
+    build: ./frontend
+    container_name: crowd-pulse-frontend
+    depends_on:
+      - backend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+
+  worker:
+    build: ./backend
+    container_name: crowd-pulse-worker
+    profiles: ["worker"]  # `docker compose up -d`에는 안 끼고, worker만 따로 켤 때만 뜬다
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      ALLOW_TEST_ANALYSIS: ${ALLOW_TEST_ANALYSIS:-true}
+    volumes:
+      - ./backend:/app
+    # models/yolo11m.pt는 각자 로컬에 받아둬야 한다(이미지에 안 들어있음, README 참고).
+    # --pixels-per-meter/--enable-extended-analysis는 필요 없으면 지워도 된다.
+    command: >
+      python -m app.worker
+      --model-path models/yolo11m.pt
+      --algorithm-version test-v1
+      --allow-test-analysis
+      --enable-extended-analysis
+      --pixels-per-meter 50
+
+volumes:
+  crowd-pulse-db-data:
+  frontend-node-modules:
