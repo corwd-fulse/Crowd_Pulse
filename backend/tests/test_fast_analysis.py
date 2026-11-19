@@ -15,7 +15,8 @@ from test_worker import worker as worker
 
 
 @pytest.mark.parametrize('profile', ['fast','full'])
-def test_pipeline_profile_selects_only_requested_components(tmp_path, monkeypatch, profile):
+@pytest.mark.parametrize('flow_method', ['full_frame','roi_crop_128'])
+def test_pipeline_profile_selects_only_requested_components(tmp_path, monkeypatch, profile, flow_method):
     cap=Mock(); cap.get.return_value=25
     monkeypatch.setattr(pipeline.cv2,'VideoCapture',Mock(return_value=cap))
     functions={
@@ -27,7 +28,8 @@ def test_pipeline_profile_selects_only_requested_components(tmp_path, monkeypatc
     }
     mocks={name:Mock(return_value=df) for name,df in functions.items()}
     for name,m in mocks.items(): monkeypatch.setattr(pipeline,name,m)
-    paths=pipeline.run_zone_pipeline('video','detections',[],str(tmp_path),analysis_profile=profile)
+    monkeypatch.setattr(pipeline, 'build_hybrid_summary', Mock(return_value={}))
+    paths=pipeline.run_zone_pipeline('video','detections',[],str(tmp_path),analysis_profile=profile,flow_method=flow_method)
     assert set(paths)==set(SCHEMAS)
     for key,path in paths.items():assert list(pd.read_csv(path).columns)==SCHEMAS[key]
     cap.release.assert_called_once()

@@ -74,12 +74,18 @@ def video_info(path):
 class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
-                 inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920):
+                 inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
+                 flow_method='full_frame'):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
         self.base = Path(base_dir or storage.BASE_DIR).resolve()
         self.model_path = Path(model_path).resolve()
         self.device = normalize_device(device)
+        if flow_method not in ('full_frame', 'roi_crop_128'):
+            raise ValueError('Invalid flow method')
+        if flow_method == 'roi_crop_128' and (self.device == 'cpu' or not allow_test or not scope_ids):
+            raise ValueError('ROI crop requires GPU, test permission and explicit job scope')
+        self.flow_method = flow_method
         if type(imgsz) is not int or imgsz <= 0 or imgsz % 32:
             raise ValueError('imgsz must be a positive multiple of 32')
         self.imgsz = imgsz
@@ -234,6 +240,8 @@ class Worker:
                 os._exit(75)
 
     def preflight(self, claim):
+        if self.flow_method == 'roi_crop_128' and claim.analysis_mode != 'test':
+            raise InputFailure('EXPERIMENT_REQUIRES_TEST_JOB')
         if claim.analysis_profile not in ('fast', 'full'):
             raise InputFailure('INVALID_ANALYSIS_PROFILE')
         source = (self.base / claim.storage_path).resolve()
@@ -286,10 +294,13 @@ class Worker:
             roi_path=out/'roi_snapshot.json'
             roi_path.write_text(json.dumps(claim.roi,ensure_ascii=True,indent=2),encoding='utf-8')
             code_hashes={p.name:sha256(p) for p in (Path(__file__).parent/'services').glob('*.py') if p.name in (
-                'tracker.py','pipeline.py','zone_analysis.py','optical_flow.py','individual_flow.py','bottleneck.py')}
+                'tracker.py','pipeline.py','zone_analysis.py','optical_flow.py','individual_flow.py','bottleneck.py','hybrid_flow.py',
+                'bottleneck_diagnostics.py','zone_replay.py','roi_geometry.py','transition_artifact.py')}
             with self.fail_stop_watchdog(), (out/'worker.log').open('w',encoding='utf-8',buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                 stage = 'TRACKING'
+                tracking_started = time.perf_counter()
                 summary, ai_settings = self.run_tracking(source,out)
+                tracking_seconds = time.perf_counter() - tracking_started
                 device = ai_settings['device']
                 detections=Path(summary['detections_csv']).resolve()
                 if not detections.is_relative_to(out.resolve()) or not detections.is_file():
@@ -307,8 +318,14 @@ class Worker:
                     pipeline = self.pipeline
                 pipeline_args = (str(source),str(detections),load_zones_from_json(str(roi_path)),str(out/'pipeline'))
                 # Preserve legacy four-argument FULL adapters.
-                paths = (pipeline(*pipeline_args, analysis_profile='fast') if claim.analysis_profile == 'fast'
-                         else pipeline(*pipeline_args))
+                if self.flow_method == 'roi_crop_128':
+                    paths = pipeline(*pipeline_args, analysis_profile=claim.analysis_profile,
+                                     flow_method=self.flow_method)
+                else:
+                    paths = (pipeline(*pipeline_args, analysis_profile='fast') if claim.analysis_profile == 'fast'
+                             else pipeline(*pipeline_args))
+                details_path = out/'pipeline'/'analysis_details.json'
+                details = json.loads(details_path.read_text(encoding='utf-8')) if details_path.is_file() else {}
                 paths={kind:Path(path).resolve() for kind,path in paths.items()}
                 if set(paths)!=set(SCHEMAS) or any(not p.is_relative_to(out.resolve()) for p in paths.values()):
                     raise InputFailure('PIPELINE_OUTPUT_PATH_NOT_ALLOWED')
@@ -322,7 +339,9 @@ class Worker:
                     video_sha256=video_hash,fps=info['fps'],frame_count=info['frame_count'],
                     analysis_mode=claim.analysis_mode,analysis_profile=claim.analysis_profile,direction_quality='unvalidated',
                     settings={'analysis_mode':claim.analysis_mode,'analysis_profile':claim.analysis_profile,'device':device,'ai_source_sha256':code_hashes,
-                              'model_sha256':sha256(self.model_path),**ai_settings},
+                              'model_sha256':sha256(self.model_path),**ai_settings,
+                              'requested_flow_method':self.flow_method,
+                              'tracking_seconds':tracking_seconds, **details},
                 )
                 (out/'execution_metadata.json').write_text(metadata.model_dump_json(indent=2),encoding='utf-8')
             self.verify_lock()
@@ -348,6 +367,8 @@ def main():
     parser.add_argument('--algorithm-version',required=True)
     parser.add_argument('--device',type=normalize_device,default='cpu',help='cpu (default), cuda:N or GPU index; no silent fallback')
     parser.add_argument('--imgsz',type=int,default=1920,help='Positive multiple of 32 (default: 1920)')
+    parser.add_argument('--flow-method',choices=('full_frame','roi_crop_128'),default='full_frame',
+                        help='Experimental crop requires GPU, --allow-test-analysis and --once --job-id; FAST skips flow')
     parser.add_argument('--allow-test-analysis',action='store_true',help='Explicitly allow test jobs and candidate ROI')
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--job-id',type=UUID,help='With --once, process/recover only this job')
@@ -361,8 +382,11 @@ def main():
         parser.error('model-path must point to an existing local model; no automatic download')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
+    if args.flow_method == 'roi_crop_128' and (args.device == 'cpu' or not args.allow_test_analysis or args.job_id is None):
+        parser.error('roi_crop_128 requires GPU, --allow-test-analysis and --once --job-id')
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
-                  scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz)
+                  scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
+                  flow_method=args.flow_method)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)

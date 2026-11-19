@@ -1,0 +1,9 @@
+# Verified execution environment, NOT original training versions. Windows x64 / Python 3.11 only.
+# Existing CPU/GPU environments must not use this file.
+numpy==2.4.6
+pandas==3.1.1
+lightgbm==4.7.0
+scikit-learn==1.9.1
+holidays==0.108
+pyarrow==26.0.1
+torch @ https://download.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp311-cp311-win_amd64.whl

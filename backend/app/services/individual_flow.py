@@ -47,7 +47,9 @@ def compute_individual_directions(
             lo = max(0, i - window_frames)
             if lo == i:
                 continue  # 비교할 이전 지점이 아직 없음
-            reliable = not _has_id_switch(points, i)
+            reliable = (all(frames[k] - frames[k - 1] == 1 and t_ms[k] > t_ms[k - 1]
+                            for k in range(lo + 1, i + 1))
+                        and not _has_id_switch(points, i))
             angle = speed = None
             if reliable:
                 dx = points[i][0] - points[lo][0]

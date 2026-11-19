@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db, settings
 from app.models.analytics import AnalysisJob, Video
+from app.services.roi_revisions import latest as latest_roi
 
 
 router = APIRouter(
@@ -116,7 +117,7 @@ def create_analysis_job(
         status="queued",
         analysis_mode=payload.analysis_mode,
         analysis_profile=payload.analysis_profile,
-        roi_snapshot=deepcopy(video.roi_snapshot),
+        roi_snapshot=deepcopy(latest_roi(db,video)[0]),
     )
 
     try:

@@ -6,6 +6,7 @@ import SideBar from './components/layout/Sidebar';
 import Dashboard from './pages/DashBoard';
 import ComingSoon from './pages/CommingSoon';
 import VideoManagement from './pages/VideoManagement';
+import CaptureSessions from './pages/CaptureSessions';
 
 function App() {
   return (
@@ -21,6 +22,7 @@ function App() {
               <Route path="/" element={<Navigate to="/dashboard" replace />} />
 
               <Route path="/dashboard" element={<Dashboard />} />
+              <Route path="/sessions" element={<CaptureSessions />} />
 
               {/* 영상 관리 페이지 */}
               <Route path="/videos" element={<VideoManagement />} />

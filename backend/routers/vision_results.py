@@ -15,18 +15,56 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import AnalysisJob, VisionResult, VisionZoneMetric, VisionBottleneckScore
 from app.services import vision_results as service
-from app.services.vision_csv import ExecutionMetadata, InvalidResult, MAX_FILE_BYTES, SCHEMAS
+from app.services.vision_csv import ExecutionMetadata, InvalidResult, MAX_STREAM_FILE_BYTES as MAX_FILE_BYTES, SCHEMAS
 
 router = APIRouter(prefix='/api/analysis/jobs', tags=['Vision results'])
 
 
+@router.get('/{job_id}/replay')
+def replay(job_id:UUID,start_ms:float|None=Query(None,ge=0,allow_inf_nan=False),end_ms:float|None=Query(None,ge=0,allow_inf_nan=False),db:Session=Depends(get_db)):
+    from app.services import replay_view,detection_view
+    job=db.get(AnalysisJob,job_id)
+    if job is None:raise HTTPException(404,'Analysis job not found')
+    try:
+        if end_ms is not None and start_ms is None:start_ms=0
+        if start_ms is not None and end_ms is not None and not start_ms<end_ms<=start_ms+30000:raise HTTPException(422,'Replay window must be greater than zero and at most 30 seconds')
+        if start_ms is None:
+            result=db.get(VisionResult,job_id)
+            if detection_view.tracking_path(job,result).stat().st_size>8*1024**2 or result.execution_snapshot['frame_count']>500000:start_ms=0
+        if start_ms is not None:
+            from app.services import replay_index
+            try:
+                index=replay_index.ensure(job,db.get(VisionResult,job_id))
+                return replay_index.window(index,start_ms,end_ms if end_ms is not None else start_ms+5000)
+            except replay_index.IndexPending:
+                return Response(content=json.dumps({'status':'indexing','retry_after_ms':500}),status_code=202,media_type='application/json',headers={'Retry-After':'1'})
+            except replay_index.WindowTooDense as exc:raise HTTPException(413,str(exc)) from None
+        return replay_view.for_job(job,db.get(VisionResult,job_id))
+    except detection_view.DetectionUnavailable as exc:
+        raise HTTPException(404,str(exc)) from None
+    except (ValueError,KeyError,TypeError,OverflowError,OSError):
+        raise HTTPException(422,'Stored replay tracking, frame index or ROI could not be validated') from None
+
+
 @router.get('/{job_id}/detections')
-def detections(job_id: UUID, db: Session = Depends(get_db)):
+def detections(job_id: UUID,start_ms:float|None=Query(None,ge=0,allow_inf_nan=False),end_ms:float|None=Query(None,ge=0,allow_inf_nan=False), db: Session = Depends(get_db)):
     from app.services import detection_view
     job = db.get(AnalysisJob, job_id)
     if job is None:
         raise HTTPException(404, 'Analysis job not found')
     try:
+        if end_ms is not None and start_ms is None:start_ms=0
+        if start_ms is not None and end_ms is not None and not start_ms<end_ms<=start_ms+30000:raise HTTPException(422,'Detection window must be greater than zero and at most 30 seconds')
+        if start_ms is None:
+            result=db.get(VisionResult,job_id)
+            if detection_view.tracking_path(job,result).stat().st_size>8*1024**2 or result.execution_snapshot['frame_count']>500000:start_ms=0
+        if start_ms is not None:
+            from app.services import replay_index
+            try:
+                return replay_index.window(replay_index.ensure(job,db.get(VisionResult,job_id)),start_ms,end_ms if end_ms is not None else start_ms+5000,boxes_only=True)
+            except replay_index.IndexPending:
+                return Response(content=json.dumps({'status':'indexing','retry_after_ms':500}),status_code=202,media_type='application/json',headers={'Retry-After':'1'})
+            except replay_index.WindowTooDense as exc:raise HTTPException(413,str(exc)) from None
         return detection_view.for_job(job, db.get(VisionResult, job_id))
     except detection_view.DetectionUnavailable as exc:
         raise HTTPException(404, str(exc)) from None
@@ -62,7 +100,7 @@ def import_results(
                     while chunk := upload.file.read(1024*1024):
                         size += len(chunk)
                         total += len(chunk)
-                        if size > MAX_FILE_BYTES or total > 256*1024*1024:
+                        if size > MAX_FILE_BYTES or total > 4*1024**3:
                             raise HTTPException(413, 'CSV upload exceeds size limit')
                         destination.write(chunk)
                 paths[kind] = path
@@ -103,8 +141,30 @@ def direction_presentation(result):
 
 def component_status(result):
     profile = result.execution_snapshot.get('analysis_profile', 'full')
-    return {key: ('not_run' if profile == 'fast' and key in ('optical_flow','bottleneck') else 'completed')
-            for key in ('tracking','observations','individual_directions','optical_flow','bottleneck')}
+    statuses = {key: ('not_run' if profile == 'fast' and key in ('optical_flow','bottleneck') else 'completed')
+                for key in ('tracking','observations','individual_directions','optical_flow','bottleneck')}
+    coverage = result.execution_snapshot.get('settings', {}).get('hybrid', {}).get('bottleneck_status', [])
+    if profile != 'fast' and coverage and any(r['status'] == 'unanalyzed' for r in coverage):
+        statuses['bottleneck'] = 'partial' if any(r['status'] == 'analyzed' for r in coverage) else 'unanalyzed'
+    return statuses
+
+
+def bottleneck_diagnostics(result, db):
+    """Explain existing results from saved metrics; never rewrite their snapshot."""
+    from app.services.bottleneck_diagnostics import describe_bottleneck_windows
+    query = select(VisionZoneMetric).where(VisionZoneMetric.analysis_job_id == result.analysis_job_id,
+                                           VisionZoneMetric.imported_at == result.imported_at)
+    hybrid = {(r['sec'], r['zone']): r for r in
+              result.execution_snapshot.get('settings', {}).get('hybrid', {}).get('rows', [])}
+    records = [dict(sec=row.video_offset_ms // 1000, zone=row.region_key, count=row.mean_person_count,
+                    motion=row.motion, inflow=row.inflow, outflow=row.outflow, low_confidence=row.low_confidence,
+                    hybrid=hybrid.get((row.video_offset_ms // 1000, row.region_key)))
+               for row in db.scalars(query)]
+    scores = db.scalars(select(VisionBottleneckScore).where(
+        VisionBottleneckScore.analysis_job_id == result.analysis_job_id,
+        VisionBottleneckScore.imported_at == result.imported_at)).all()
+    return describe_bottleneck_windows(records, {(r.window_start_ms // 1000, r.region_key) for r in scores},
+                                      analysis_profile=result.execution_snapshot.get('analysis_profile', 'full'))
 
 
 @router.get('/{job_id}/results')
@@ -117,6 +177,7 @@ def result_summary(job_id: UUID, db: Session = Depends(get_db)):
     return {
         'analysis_job_id': job_id, 'video_id': job.video_id, 'status': job.status, 'analysis_mode':job.analysis_mode,
         'analysis_profile': result.execution_snapshot.get('analysis_profile','full'), 'components': component_status(result),
+        'bottleneck_status': bottleneck_diagnostics(result, db),
         'roi_status': result.roi_status, 'roi_snapshot': result.roi_snapshot,
         'video_resolution': [result.width, result.height], 'execution_snapshot': result.execution_snapshot,
         'analysis_started_at': result.analysis_started_at, 'analysis_finished_at': result.analysis_finished_at,
@@ -143,11 +204,14 @@ def zone_metrics(job_id: UUID, region_key: str | None = None,
         query = query.where(VisionZoneMetric.region_key == region_key)
     rows = db.scalars(query.order_by(VisionZoneMetric.video_offset_ms, VisionZoneMetric.region_key).offset(offset).limit(limit)).all()
     presentation = direction_presentation(result)
+    hybrid_rows = result.execution_snapshot.get('settings', {}).get('hybrid', {}).get('rows', [])
+    hybrid = {(r['sec'] * 1000, r['zone']): r for r in hybrid_rows}
     items = []
     for row in rows:
         item = {c.name:getattr(row,c.name) for c in row.__table__.columns}
         item['flow_direction_confirmed'] = presentation['confirmed_for_display'] and row.has_flow and row.flow_angle_deg is not None and row.low_confidence is False
         item['individual_direction_confirmed'] = presentation['confirmed_for_display'] and row.has_individual_aggregate and row.mean_angle_deg is not None
+        item['hybrid'] = hybrid.get((row.video_offset_ms, row.region_key))
         items.append(item)
     return {'items': items, 'limit':limit, 'offset':offset, 'direction_presentation': presentation}
 

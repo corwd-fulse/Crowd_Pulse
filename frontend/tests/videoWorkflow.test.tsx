@@ -67,6 +67,6 @@ it('selects a new request immediately, hides old results while queued and reconn
   await waitFor(()=>expect((screen.getByRole('button',{name:'분석 이력 새로고침'}) as HTMLButtonElement).disabled).toBe(false));
   fireEvent.click(screen.getByRole('button',{name:'분석 이력 새로고침'}));
   await waitFor(()=>expect((screen.getByRole('combobox',{name:'탐지 결과 작업'}) as HTMLSelectElement).value).toBe(queued.id));
-  await waitFor(()=>expect(getDetections).toHaveBeenCalledWith(queued.id,expect.any(AbortSignal)));
+  await waitFor(()=>expect(getDetections).toHaveBeenCalledWith(queued.id,expect.any(AbortSignal),0,5000));
   expect(createAnalysisJob).toHaveBeenCalledWith('new-video','production','fast');
 });

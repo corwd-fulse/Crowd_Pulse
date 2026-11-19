@@ -1,3 +1,4 @@
+import {useMediaWindow} from '../../hooks/useMediaWindow';
 import {useEffect,useState} from 'react';
 import type {RefObject} from 'react';
 import {getDetections} from '../../services/api';
@@ -5,7 +6,6 @@ import type {DetectionResult} from '../../services/api';
 import {detectionAt} from '../../services/detectionTiming';
 
 export default function DetectionOverlay({jobId,videoId,video,resolution,show,emptyMessage='완료된 분석 작업이 없습니다.'}: {jobId:string|null;videoId:string;video:RefObject<HTMLVideoElement|null>;resolution:[number,number];show:boolean;emptyMessage?:string}) {
-  const [stored,setStored]=useState<{id:string;data:DetectionResult|null;error?:boolean}|null>(null);
   const [time,setTime]=useState(0);
   const [displayWidth,setDisplayWidth]=useState(960);
   useEffect(()=>{
@@ -14,15 +14,6 @@ export default function DetectionOverlay({jobId,videoId,video,resolution,show,em
     const observer=new ResizeObserver(entries=>{const width=entries[0].contentRect.width;if(width>0)setDisplayWidth(width);});
     observer.observe(element);return ()=>observer.disconnect();
   },[video]);
-  useEffect(()=>{
-    if(!jobId)return;
-    const controller=new AbortController();
-    getDetections(jobId,controller.signal).then(data=>{
-      if(data&&(data.analysis_job_id!==jobId||data.video_id.replaceAll('-','')!==videoId.replaceAll('-','')))throw new Error('Mismatched tracking result');
-      if(!controller.signal.aborted)setStored({id:jobId,data});
-    }).catch(()=>{if(!controller.signal.aborted)setStored({id:jobId,data:null,error:true});});
-    return ()=>controller.abort();
-  },[jobId,videoId]);
   useEffect(()=>{
     const element=video.current;if(!element)return;
     let stopped=false,callback=0;
@@ -33,7 +24,8 @@ export default function DetectionOverlay({jobId,videoId,video,resolution,show,em
     element.addEventListener('seeked',update);element.addEventListener('loadedmetadata',update);element.addEventListener('timeupdate',fallbackUpdate);
     return ()=>{stopped=true;if(callback)element.cancelVideoFrameCallback(callback);element.removeEventListener('seeked',update);element.removeEventListener('loadedmetadata',update);element.removeEventListener('timeupdate',fallbackUpdate);};
   },[video]);
-  const state=stored?.id===jobId?stored:null;
+  const page=useMediaWindow<DetectionResult>(jobId,videoId,time,getDetections);
+  const state=page.loaded||page.error?{data:page.data,error:page.error}:null;
   const mismatch=state?.data&&state.data.video_resolution.some((n,i)=>n!==resolution[i]);
   const frame=state?.data&&!mismatch?detectionAt(state.data,time):undefined;
   return <>
