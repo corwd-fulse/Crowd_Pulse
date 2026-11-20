@@ -1,0 +1,11 @@
+# Independent Forecast environment only. Do not install into existing CPU/GPU environments.
+# Import inventory from forecast/serving, features_1h and anomaly_video.
+# These are dependency declarations, NOT a training-version lock or a verified version set.
+numpy
+pandas
+torch
+lightgbm
+holidays
+scikit-learn
+# Required when reading team Parquet intermediates.
+pyarrow

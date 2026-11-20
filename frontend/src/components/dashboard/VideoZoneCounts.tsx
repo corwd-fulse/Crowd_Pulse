@@ -9,12 +9,12 @@ export default function VideoZoneCounts({jobId,videoId,video}: {jobId:string|nul
   useEffect(()=>{
     if(!jobId)return;
     const controller=new AbortController();
-    getVisionObservations(jobId,controller.signal).then(data=>{
+    getVisionObservations(jobId,controller.signal,{start_ms:Math.floor(second/10)*10000,end_ms:Math.floor(second/10)*10000+10000}).then(data=>{
       if(data.summary.analysis_job_id!==jobId||data.metrics.some(row=>row.analysis_job_id!==jobId)||data.summary.video_id.replaceAll('-','')!==videoId.replaceAll('-',''))throw new Error('Mismatched observation source');
       if(!controller.signal.aborted)setStored({id:jobId,data});
     }).catch(()=>{if(!controller.signal.aborted)setStored({id:jobId,error:true});});
     return ()=>controller.abort();
-  },[jobId,videoId]);
+  },[jobId,videoId,Math.floor(second/10)]);
   useEffect(()=>{
     const v=video.current;if(!v)return;
     const update=()=>setSecond(Math.floor(v.currentTime));

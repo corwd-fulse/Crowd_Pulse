@@ -15,6 +15,7 @@ export const navGroups: NavGroup[] = [
   {
     title: '관제',
     items: [
+      {label: '장소 · 촬영 세션', path: '/sessions', description: '관제 장소, 다중 영상과 학습 데이터 추출을 관리합니다.'},
       {
         label: '종합 대시보드',
         path: '/dashboard',

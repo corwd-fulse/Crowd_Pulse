@@ -11,7 +11,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.models import AnalysisJob, Video, VisionResult, VisionZoneMetric, VisionBottleneckScore
-from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle
+from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle, DiskRows
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -80,6 +80,8 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
                 if hashlib.file_digest(stream, 'sha256').hexdigest() != manifest[kind]['sha256']:
                     raise InvalidResult('CSV changed during import')
             manifest[kind]['path'] = destination.relative_to(BASE_DIR).as_posix()
+            if isinstance(records[kind],DiskRows):
+                records[kind]=DiskRows(destination,records[kind].model,records[kind].count)
         result = VisionResult(
             analysis_job_id=job_id, analysis_started_at=metadata.analysis_started_at,
             analysis_finished_at=metadata.analysis_finished_at, fingerprint=fingerprint,
@@ -90,7 +92,17 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
         db.flush()
         # Merge keys, not row positions. Missing aggregate buckets stay NULL.
         combined = {}
+        streaming=any(isinstance(records[k],DiskRows) for k in ('crowd_observations','flow','individual_zone_agg'))
+        def flush_zone(rows,kind):
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            fields={'crowd_observations':['has_observation','mean_person_count','inflow','outflow'],
+                'flow':['has_flow','flow_angle_deg','magnitude_px','motion','low_confidence'],
+                'individual_zone_agg':['has_individual_aggregate','mean_angle_deg','direction_sample_count']}[kind]
+            statement=pg_insert(VisionZoneMetric).values(rows)
+            db.execute(statement.on_conflict_do_update(index_elements=['analysis_job_id','imported_at','region_key','video_offset_ms'],
+                set_={field:getattr(statement.excluded,field) for field in fields}))
         for kind in ['crowd_observations', 'flow', 'individual_zone_agg']:
+            batch=[]
             for row in records[kind]:
                 key = (row['sec'] * 1000, row['zone'])
                 target = combined.setdefault(key, dict(
@@ -107,17 +119,24 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
                     target.update(has_flow=True, flow_angle_deg=row['angle_deg'], magnitude_px=row['magnitude_px'], motion=row['motion'], low_confidence=row['low_confidence'])
                 else:
                     target.update(has_individual_aggregate=True, mean_angle_deg=row['mean_angle_deg'], direction_sample_count=row['n_tracks'])
+                if streaming:
+                    batch.append(target);combined.clear()
+                    if len(batch)>=1000:flush_zone(batch,kind);batch=[]
+            if streaming and batch:flush_zone(batch,kind)
         zone_rows = list(combined.values())
         for offset in range(0, len(zone_rows), 1000):
             db.execute(insert(VisionZoneMetric), zone_rows[offset:offset+1000])
-        score_rows = [dict(
+        score_rows = (dict(
             analysis_job_id=job_id, imported_at=result.imported_at, region_key=row['zone'],
             window_start_ms=row['window_start']*1000, score=row['score'], growth=row['growth'],
             slowdown=row['slowdown'], imbalance=row['imbalance'], risk_level=row['risk_level'],
             severity=RISK_MAPPING[row['risk_level']],
-        ) for row in records['bottleneck_scores']]
-        for offset in range(0, len(score_rows), 1000):
-            db.execute(insert(VisionBottleneckScore), score_rows[offset:offset+1000])
+        ) for row in records['bottleneck_scores'])
+        batch=[]
+        for row in score_rows:
+            batch.append(row)
+            if len(batch)>=1000:db.execute(insert(VisionBottleneckScore),batch);batch=[]
+        if batch:db.execute(insert(VisionBottleneckScore),batch)
         # Use caller-supplied actual execution timestamps, never import time.
         job.started_at = metadata.analysis_started_at
         job.finished_at = metadata.analysis_finished_at
