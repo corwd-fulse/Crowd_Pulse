@@ -32,6 +32,8 @@ def _run_zone_pipeline(
     out_dir: str,
     *, analysis_profile: str = 'full', frame_stride: int = 1,
     flow_method: str = 'full_frame',
+    checkpoint_path: str | None = None,
+    progress_callback=None,
     _stack=None,
 ) -> dict[str, str]:
     """반환: {결과종류: 저장된 csv 경로}.
@@ -40,6 +42,12 @@ def _run_zone_pipeline(
     detections_csv: tracker.py가 만든 frame,t_ms,track_id,x1,y1,x2,y2,conf 형식 csv.
     frame_stride: 장시간 FULL 분석에서 Optical Flow 비용을 줄이는 옵션(optical_flow.py 참고).
     기본값 1은 예전과 100% 동일하게 매 프레임 계산한다. flow.csv의 컬럼 모양은 그대로다.
+
+    checkpoint_path: 지정하면 Optical Flow 단계(가장 비싼 연산, 중간에 예외로 끊길 가능성이
+    제일 큰 구간)가 예외로 끊겼을 때 처음부터 다시 돌리지 않고, 같은 호출 안에서 딱 한 번
+    checkpoint에서 재개를 시도한다. worker.py의 job 재시도 정책과는 무관하다 — 같은
+    프로세스·같은 호출 안에서의 재시도일 뿐이다(optical_flow.py의 _Checkpoint 설명 참고).
+    progress_callback: Optical Flow 진행 상황을 (처리한 프레임 수, 전체 프레임 수)로 받는다.
     """
     if analysis_profile not in ('fast', 'full'):
         raise ValueError('Invalid analysis profile')
@@ -64,9 +72,21 @@ def _run_zone_pipeline(
     else:
         zone_ts = compute_zone_timeseries(detections_csv, zones, fps=fps)
     flow_started = time.perf_counter()
-    motion_ts = (compute_zone_motion(video_path, zones, fps=fps, frame_stride=frame_stride,
-                                     flow_method=flow_method) if analysis_profile == 'full'
-                 else pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence']))
+    if analysis_profile == 'full':
+        flow_kwargs = dict(fps=fps, frame_stride=frame_stride, flow_method=flow_method,
+                           checkpoint_path=checkpoint_path, progress_callback=progress_callback)
+        try:
+            motion_ts = compute_zone_motion(video_path, zones, **flow_kwargs)
+        except Exception as exc:
+            if checkpoint_path is None:
+                raise
+            # 가장 비싼 단계에서 끊긴 경우, 처음부터 다시 돌리지 않고 같은 호출 안에서
+            # 딱 한 번 checkpoint 지점부터 재개를 시도한다. 재개도 실패하면 그대로 올려서
+            # job 실패 처리는 기존 정책(worker.py)을 그대로 따른다 — job 자체를 재시도하지 않는다.
+            print(f'optical flow interrupted ({exc!r}); resuming once from checkpoint {checkpoint_path}')
+            motion_ts = compute_zone_motion(video_path, zones, **flow_kwargs)
+    else:
+        motion_ts = pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence'])
     flow_seconds = time.perf_counter() - flow_started
     if not streamed:
         individual = compute_individual_directions(detections_csv)
@@ -124,12 +144,14 @@ def _run_zone_pipeline(
 
 
 def run_zone_pipeline(video_path, detections_csv, zones, out_dir, *, analysis_profile="full",
-                      frame_stride=1, flow_method="full_frame"):
+                      frame_stride=1, flow_method="full_frame", checkpoint_path=None,
+                      progress_callback=None):
     from contextlib import ExitStack
     with ExitStack() as stack:
         return _run_zone_pipeline(video_path, detections_csv, zones, out_dir,
                                   analysis_profile=analysis_profile, frame_stride=frame_stride,
-                                  flow_method=flow_method, _stack=stack)
+                                  flow_method=flow_method, checkpoint_path=checkpoint_path,
+                                  progress_callback=progress_callback, _stack=stack)
 
 
 def run_extended_zone_pipeline(

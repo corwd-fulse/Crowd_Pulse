@@ -281,3 +281,181 @@ def test_pipeline_cannot_return_external_paths(worker,db,seeded,bundle):
     assert result['error']=='PIPELINE_OUTPUT_PATH_NOT_ALLOWED'
     db.expire_all()
     assert db.get(VisionResult,seeded.id) is None
+
+
+class _CrashedJob:
+    """Optical Flow 중간에 프로세스가 통째로 죽은 뒤(run_once()의 예외 처리기를 전혀
+    거치지 않은, recover_interrupted()가 찾아야 하는 바로 그 상태)를 실제 DB 위에
+    재현한다. job은 DB에 'running'으로, checkpoint+resume_manifest는 디스크에 유효한
+    상태로 남는다 — 세 가지 통합 테스트(정상 재개/중복 방지/checkpoint 손상)가 공유한다."""
+
+    def __init__(self, db, tmp_path, monkeypatch):
+        import json as json_module
+        import tempfile as tempfile_module
+        from pathlib import Path as PathCls
+
+        import cv2
+        import numpy as np
+
+        from app.services import vision_results as storage_module
+        from app.services.optical_flow import compute_checkpoint_fingerprint, compute_zone_motion
+        from app.services.zone_analysis import load_zones_from_json
+        from app.worker import TRACKED_SERVICE_FILES, sha256 as worker_sha256
+        import app.worker as worker_module
+
+        monkeypatch.setattr(storage_module, 'BASE_DIR', tmp_path)
+        self.base = base = tmp_path
+        (base/'uploads/videos').mkdir(parents=True)
+        video_path = base/'uploads/videos/real.mp4'
+        size, n, fps = 160, 30, 10
+        rng = np.random.default_rng(5)
+        frame0 = cv2.cvtColor(cv2.GaussianBlur(rng.integers(0, 255, (size, size), dtype=np.uint8), (15, 15), 0), cv2.COLOR_GRAY2BGR)
+        writer = cv2.VideoWriter(str(video_path), cv2.VideoWriter_fourcc(*'mp4v'), fps, (size, size))
+        for i in range(n):
+            writer.write(np.roll(frame0, shift=i*2, axis=1))
+        writer.release()
+        video_hash = worker_sha256(video_path)
+        roi = {'status': 'approved', 'approved_for_analysis': True, 'video_resolution': [size, size],
+              'zones': [{'name': 'A', 'polygon': [[0, 0], [size, 0], [size, size], [0, size]]}],
+              'source_sha256': video_hash}
+        video = Video(filename='real.mp4', saved_filename='real.mp4', storage_path='uploads/videos/real.mp4',
+                     file_size=video_path.stat().st_size)
+        db.add(video); db.flush()
+        self.job = job = AnalysisJob(video_id=video.id, roi_snapshot=roi, analysis_profile='full')
+        db.add(job); db.flush()
+        model_path = base/'model.pt'
+        model_path.write_bytes(b'not-a-real-model')
+
+        def fake_track(source, out, name):
+            out.mkdir(parents=True)
+            det = out/'detections.csv'
+            # 0-indexed frames, matching frame_count=n: a detection at frame=n-1
+            # (t_ms=(n-1)*1000/fps) must stay strictly under duration=n/fps, or
+            # vision_csv.validate_bundle's "offset outside video" check correctly rejects
+            # the last second bucket as out-of-range.
+            lines = ['frame,t_ms,track_id,x1,y1,x2,y2,conf']
+            for f in range(n):
+                lines.append(f'{f},{int(f*1000/fps)},1,{10+f%20},10,{20+f%20},20,0.9')
+            det.write_text('\n'.join(lines)+'\n', encoding='utf-8')
+            return {'detections_csv': str(det), 'frame_count': n}
+        self.fake_track = fake_track
+
+        self.sessions_factory = sessionmaker(bind=db.connection(), join_transaction_mode='create_savepoint', expire_on_commit=False)
+        self.model_path = model_path
+        self.db = db
+
+        worker1 = self.make_worker()
+        with worker1.exclusive():
+            claim = worker1.claim_next()
+            assert claim is not None
+            self.claim = claim
+            source, info, video_hash2 = worker1.preflight(claim)
+            root = worker1.base/'uploads/analysis'/str(claim.job_id)
+            root.mkdir(parents=True, exist_ok=True)
+            self.root = root
+            out = PathCls(tempfile_module.mkdtemp(prefix=f'{claim.token.hex}-', dir=root))
+            roi_path = out/'roi_snapshot.json'
+            roi_path.write_text(json_module.dumps(claim.roi), encoding='utf-8')
+            summary, ai_settings = worker1.run_tracking(source, out)
+            detections = PathCls(summary['detections_csv']).resolve()
+            code_hashes = {p.name: worker_sha256(p) for p in (PathCls(worker_module.__file__).parent/'services').glob('*.py')
+                          if p.name in TRACKED_SERVICE_FILES}
+            zones = load_zones_from_json(str(roi_path))
+            self.checkpoint_path = checkpoint_path = root/'flow_checkpoint.bin'
+            flow_fp = compute_checkpoint_fingerprint(str(source), zones, info['fps'], worker1.frame_stride, worker1.flow_method)
+            worker1._write_resume_manifest(claim, root, out, detections, video_hash2, code_hashes, 3.0,
+                                           ai_settings, checkpoint_path, flow_fp)
+            # "프로세스가 죽는다": run_once()를 거치지 않고 compute_zone_motion만 직접
+            # 돌리다가 중간에 예외를 내서 멈춘다 — run_once()의 재시도/예외처리를 전혀
+            # 거치지 않았으므로 job은 DB에 'running'으로 그대로 남는다(실제 kill -9가
+            # 남기는 상태와 동일).
+            def crash_partway(frame_idx, frame_count):
+                if frame_idx >= 10:
+                    raise RuntimeError('simulated abrupt worker death')
+            with pytest.raises(RuntimeError, match='simulated abrupt worker death'):
+                compute_zone_motion(str(source), zones, fps=info['fps'], frame_stride=worker1.frame_stride,
+                                    flow_method=worker1.flow_method, checkpoint_path=str(checkpoint_path),
+                                    checkpoint_every_frames=5, progress_callback=crash_partway)
+        db.expire_all()
+        assert db.get(AnalysisJob, job.id).status == 'running'
+        assert checkpoint_path.exists()
+
+    def make_worker(self, **overrides):
+        kwargs = dict(base_dir=self.base, device='cpu', sessions=self.sessions_factory,
+                     scope_ids=[self.job.id], track=Mock(side_effect=self.fake_track), pipeline=None,
+                     frame_stride=2, heartbeat_seconds=60)
+        kwargs.update(overrides)
+        return Worker(self.model_path, kwargs.pop('algorithm_version', 'resume-test-v1'), **kwargs)
+
+
+@pytest.mark.integration
+def test_resume_after_restart_skips_tracking_and_preserves_job_identity(db,tmp_path,monkeypatch):
+    """서버/프로세스가 Optical Flow 중간에 통째로 죽은 뒤 재시작한 새 Worker가, YOLO/
+    ByteTrack을 다시 돌리지 않고 같은 job_id·같은 started_at으로 checkpoint부터 이어서
+    끝까지 성공시키는지 확인한다. 실제 Postgres가 필요하다.
+    """
+    crashed = _CrashedJob(db, tmp_path, monkeypatch)
+    worker2 = crashed.make_worker()
+    with worker2.exclusive():
+        recovered=worker2.recover_interrupted()
+        assert recovered==1
+        db.expire_all()
+        assert db.get(AnalysisJob,crashed.job.id).status=='queued'
+        assert db.get(AnalysisJob,crashed.job.id).worker_token is None
+        result=worker2.run_once()
+    assert result['status']=='succeeded',result
+    worker2.track.assert_not_called()  # tracking 재실행 안 됨 — 이전 시도의 detections.csv 재사용
+    db.expire_all()
+    job_row=db.get(AnalysisJob,crashed.job.id)
+    assert job_row.status=='succeeded'
+    assert job_row.started_at==crashed.claim.started_at  # 연속성: 재개 전 최초 시작 시각 그대로
+    assert db.get(VisionResult,crashed.job.id) is not None  # 결과가 정확히 한 번 저장됨
+    assert not (crashed.root/'resume_manifest.json').exists()  # 성공 후 정리됨
+
+
+@pytest.mark.integration
+def test_resumed_success_stores_exactly_once_and_blocks_concurrent_worker(db,tmp_path,monkeypatch):
+    """중복 DB 저장 방지: 재개로 성공한 뒤 run_once()를 또 불러도 처리할 큐가 없어 None이고,
+    VisionResult는 여전히 하나뿐이다. 중복 Worker 실행 방지: 재개를 시도하는 동안(exclusive()
+    보유 중) 다른 Worker 인스턴스는 전역 단일 실행 슬롯 때문에 끼어들 수 없다."""
+    crashed = _CrashedJob(db, tmp_path, monkeypatch)
+    from app.services import vision_results as storage_module
+    store_calls=[]
+    real_store=storage_module.store_result
+    def counting_store(*a,**kw):
+        store_calls.append(1)
+        return real_store(*a,**kw)
+    monkeypatch.setattr(storage_module,'store_result',counting_store)
+
+    worker2 = crashed.make_worker()
+    with worker2.exclusive():
+        other = crashed.make_worker()
+        with pytest.raises(WorkerBusy):
+            with other.exclusive():
+                pass  # 재개 작업 도중에는 두 번째 Worker가 절대 끼어들 수 없다
+        assert worker2.recover_interrupted()==1
+        result=worker2.run_once()
+        assert result['status']=='succeeded',result
+        assert worker2.run_once() is None  # 더 처리할 큐가 없음 — 재실행/재집계 없음
+    assert len(store_calls)==1  # store_result()가 정확히 한 번만 호출됨
+    db.expire_all()
+    assert db.get(VisionResult,crashed.job.id) is not None
+
+
+@pytest.mark.integration
+def test_corrupted_checkpoint_after_crash_fails_with_clear_reason_not_silent_resume(db,tmp_path,monkeypatch):
+    """checkpoint가 죽은 뒤 손상되면(디스크 오류 등) 임의로 재개하지 않고, 구체적인 사유와
+    함께 failed로 마감한다 — WORKER_INTERRUPTED_NO_RESUME 안에 RESUME_CHECKPOINT_INVALID."""
+    crashed = _CrashedJob(db, tmp_path, monkeypatch)
+    crashed.checkpoint_path.write_bytes(b'corrupted, not a real checkpoint file at all')
+
+    worker2 = crashed.make_worker()
+    with worker2.exclusive():
+        recovered=worker2.recover_interrupted()
+        assert recovered==1
+    db.expire_all()
+    job_row=db.get(AnalysisJob,crashed.job.id)
+    assert job_row.status=='failed'
+    assert 'WORKER_INTERRUPTED_NO_RESUME' in job_row.error_message
+    assert 'RESUME_CHECKPOINT_INVALID' in job_row.error_message
+    worker2.track.assert_not_called()  # 재개도, 새로 돌리는 것도 전혀 시도하지 않음
