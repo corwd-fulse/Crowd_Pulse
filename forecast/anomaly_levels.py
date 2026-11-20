@@ -8,7 +8,6 @@
 from __future__ import annotations
 
 import json
-import cv2
 import numpy as np, pandas as pd
 
 from .anomaly_video import LOOKBACK_S, _events, _finish
@@ -28,6 +27,17 @@ def _zone_poly(z):
     return np.array(z["polygon"] if isinstance(z, dict) else z.polygon, np.float32)
 
 
+def _in_poly(pts, poly):
+    """점들이 다각형 안(경계 포함)인지 = cv2.pointPolygonTest(...) >= 0 과 같은 판정. numpy만 써서 예측 환경에 opencv가 없어도 된다."""
+    p = np.asarray(pts, float).reshape(-1, 2); x, y = p[:, :1], p[:, 1:]
+    a = np.asarray(poly, float); b = np.roll(a, -1, 0)
+    ax, ay, dx, dy = a[:, 0], a[:, 1], b[:, 0] - a[:, 0], b[:, 1] - a[:, 1]
+    crosses = ((ay > y) != (b[:, 1] > y)) & (x < dx * (y - ay) / np.where(dy == 0, 1, dy) + ax)  # 오른쪽 반직선과 만나는 변 수
+    t = np.clip(((x - ax) * dx + (y - ay) * dy) / np.maximum(dx * dx + dy * dy, 1e-12), 0, 1)
+    on_edge = (np.hypot(ax + t * dx - x, ay + t * dy - y) < 1e-6).any(1)
+    return (crosses.sum(1) % 2 == 1) | on_edge
+
+
 def trajectory_features(directions_csv, detections_csv, zones, fps, window_frames=TRACK_WINDOW_FRAMES):
     """-> DataFrame[sec, zone, reverse_ratio, dwell, n_people].
     구역 배정: 박스 하단 중앙이 구역 다각형 안(팀 zone_analysis와 같은 기준).
@@ -36,8 +46,10 @@ def trajectory_features(directions_csv, detections_csv, zones, fps, window_frame
     ind, det = pd.read_csv(directions_csv), pd.read_csv(detections_csv)
     m = ind[ind.reliable.astype(bool)].merge(det, on=["frame", "track_id"], suffixes=("", "_d"))
     bx, by = (m.x1 + m.x2) / 2, m.y2
-    polys = [(_zone_name(z), _zone_poly(z)) for z in zones]
-    m["zone"] = [next((n for n, p in polys if cv2.pointPolygonTest(p, (float(x), float(y)), False) >= 0), None) for x, y in zip(bx, by)]
+    pts, zone = np.column_stack([bx, by]), np.full(len(m), None, dtype=object)
+    for z in reversed(zones):  # 겹치면 앞 구역 우선(이전 next(...)와 같음)
+        zone[_in_poly(pts, _zone_poly(z))] = _zone_name(z)
+    m["zone"] = zone
     m = m.dropna(subset=["zone"]).copy()
     m["sec"] = (m.frame / fps).astype(int)
     m["v"] = m.speed_px / window_frames * fps / (m.y2 - m.y1).clip(lower=1)
@@ -139,7 +151,6 @@ def arrival_eta(detections, zones, horizon=max(ARRIVAL_HS), hist_s=2.0, min_span
     """사람·초마다 구역별 지금 안에 있는지(in_<구역>)와 들어갈/나갈 때까지 남은 초(eta_in_<구역>, eta_out_<구역>, horizon초 안에 없으면 inf).
     이동: 직선(최근 속도). flow_map을 주면 k초 뒤 속도 = e^(-k/tau_s)·내 속도 + (1-e^(-k/tau_s))·지도 속도(그 위치),
     이력이 짧아 속도를 모르는 사람은 지도 속도만 쓴다. 이력이 충분한데 느린 사람은 제자리."""
-    from matplotlib.path import Path as MplPath  # 많은 점의 다각형 포함 여부를 한 번에 계산
     det = _read_det(detections)
     if stitch_gap_s > 0:
         det = stitch_tracks(det, stitch_gap_s)
@@ -151,8 +162,8 @@ def arrival_eta(detections, zones, horizon=max(ARRIVAL_HS), hist_s=2.0, min_span
         fm, c = flow_map, flow_map["cell"]
         ny, nx = fm["vx"].shape
         follow = K.moving.to_numpy() | ~K.known.to_numpy()  # 움직이는 사람 + 속도를 모르는 사람만 지도를 따른다
-    paths = [(_zone_name(z), MplPath(_zone_poly(z))) for z in zones]
-    now = {nm: p.contains_points(P0) for nm, p in paths}
+    paths = [(_zone_name(z), _zone_poly(z)) for z in zones]
+    now = {nm: _in_poly(P0, p) for nm, p in paths}
     eta_in = {nm: np.full(len(K), np.inf) for nm, _ in paths}; eta_out = {nm: np.full(len(K), np.inf) for nm, _ in paths}
     pos = P0.copy()
     for k in range(1, horizon + 1):
@@ -164,7 +175,7 @@ def arrival_eta(detections, zones, horizon=max(ARRIVAL_HS), hist_s=2.0, min_span
         else:
             pos = P0 + V0 * k
         for nm, p in paths:
-            ins = p.contains_points(pos)
+            ins = _in_poly(pos, p)
             eta_in[nm] = np.where(np.isinf(eta_in[nm]) & ~now[nm] & ins, k, eta_in[nm])
             eta_out[nm] = np.where(np.isinf(eta_out[nm]) & now[nm] & ~ins, k, eta_out[nm])
     for nm, _ in paths:

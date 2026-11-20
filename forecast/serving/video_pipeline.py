@@ -33,6 +33,7 @@ from numpy.lib.stride_tricks import sliding_window_view
 
 from .. import anomaly_video as av
 from .. import anomaly_levels as al
+from .minute_forecast import run_minute_forecast
 
 P = 5  # 입력으로 쓰는 과거 시점 수
 REFIT_EVERY_S = 30  # LightGBM 재학습 간격(초). ridge는 매초 다시 학습
@@ -277,10 +278,12 @@ def skill_table(fc):
 
 
 def run_video_forecast(source, out_dir=None, horizons=(10, 30, 60), models=MODELS, base_time=None, job_id=None, anomaly=True,
-                       target="mean10", detections_csv=None, zones=None, fps=None, horizon_s=None, pre_dir=None):
+                       target="mean10", detections_csv=None, zones=None, fps=None, horizon_s=None, pre_dir=None, zone_meta=None):
     """영상 CSV -> forecast_video.csv(예측), anomaly_events.csv(이상 이벤트), anomaly_timeline.csv(구역별 매초 3단계).
     base_time: 촬영 시작 시각(있으면 *_at 컬럼을 채움). detections_csv + zones(+fps)를 주면 역방향·체류 특징을 계산한다.
-    horizon_s(정수)는 이전 호출 방식 호환용으로, 주면 horizons=(horizon_s,)와 같다. pre_dir: 미리 학습 모델 폴더(기본 artifacts/video)."""
+    horizon_s(정수)는 이전 호출 방식 호환용으로, 주면 horizons=(horizon_s,)와 같다. pre_dir: 미리 학습 모델 폴더(기본 artifacts/video).
+    zone_meta(구역 실면적·폭·출구 방향 dict 또는 JSON 경로)를 주면 5·10·15분 뒤 예측 + 경보(minute_forecast)도 실행해
+    forecast_minutes.csv, alarms_minutes.csv 를 남긴다. horizons=()이면 초 단위 예측은 건너뛴다."""
     if horizon_s is not None:
         horizons = (horizon_s,)
     bad = set(models) - set(MODELS)
@@ -288,8 +291,10 @@ def run_video_forecast(source, out_dir=None, horizons=(10, 30, 60), models=MODEL
         raise ValueError(f"모르는 모델: {sorted(bad)} (가능: {MODELS})")
     if target not in TARGETS:
         raise ValueError(f"target은 {TARGETS} 중 하나")
-    if not horizons or min(horizons) < 1:
+    if horizons and min(horizons) < 1:
         raise ValueError("예측 시간(horizons)은 1초 이상이어야 합니다.")
+    if not horizons and zone_meta is None:
+        raise ValueError("horizons(초 단위)나 zone_meta(분 단위) 중 하나는 있어야 합니다.")
     ts, info = load_video_series(source)
     folder = Path(info["crowd_csv"]).parent
     if detections_csv is not None and zones is not None and (folder / "individual_directions.csv").exists():
@@ -352,6 +357,10 @@ def run_video_forecast(source, out_dir=None, horizons=(10, 30, 60), models=MODEL
         an.assign(event_at=iso(an.event_at)).to_csv(apath, index=False, encoding="utf-8-sig")
         tl.to_csv(tpath, index=False, encoding="utf-8-sig")
         an_info["level_seconds"] = tl.groupby(["zone_id", "level"]).size().unstack(fill_value=0).to_dict("index")
+    mres = None
+    if zone_meta is not None:
+        mres = run_minute_forecast(folder, zone_meta, detections_csv, fps or 10.0, out_dir)
+        info["minutes"] = mres["info"]
     sk = skill_table(fc)
     info.update({"horizons": list(horizons), "target": target, "rows": len(fc),
                  "backtest": {f"{h}s/{m}": v for (h, m), v in sk.items()},
@@ -359,23 +368,35 @@ def run_video_forecast(source, out_dir=None, horizons=(10, 30, 60), models=MODEL
                  "anomaly_events": int(len(an)), "level_events": int((an.method == "level").sum()) if len(an) else 0, **an_info,
                  "note": "걷기식 예측: 매초 그 시각까지의 영상만으로 학습·예측. skill>0이면 직전값보다 낫다. 짧은 영상의 수치는 참고용."})
     return {"forecast_path": str(fpath), "anomaly_path": str(apath) if apath else None, "timeline_path": str(tpath) if tpath else None,
-            "forecasts": fc, "anomalies": an, "timeline": tl, "info": info}
+            "forecasts": fc, "anomalies": an, "timeline": tl, "info": info,
+            "minute_forecast_path": mres["forecast_path"] if mres else None, "minute_alarm_path": mres["alarm_path"] if mres else None,
+            "minute_forecasts": mres["forecasts"] if mres else None, "minute_alarms": mres["alarms"] if mres else None}
 
 
 def main():
     ap = argparse.ArgumentParser(description="영상 분석 CSV로 구역 인원 단기 예측과 이상 흐름 3단계를 실행한다.")
     ap.add_argument("source", help="영상 분석 결과 폴더 또는 crowd_observations.csv")
-    ap.add_argument("--out-dir"); ap.add_argument("--horizons", type=int, nargs="+", default=[10, 30, 60], help="몇 초 뒤를 예측할지")
+    ap.add_argument("--out-dir"); ap.add_argument("--horizons", type=int, nargs="*", default=[10, 30, 60], help="몇 초 뒤를 예측할지(값 없이 --horizons 만 쓰면 초 단위 예측 건너뜀)")
     ap.add_argument("--target", default="mean10", choices=TARGETS)
     ap.add_argument("--base-time", help="촬영 시작 시각 (예: 2026-10-31 21:00)")
     ap.add_argument("--models", nargs="+", default=list(MODELS), choices=MODELS)
     ap.add_argument("--no-anomaly", action="store_true")
     ap.add_argument("--pre-dir", help=f"미리 학습 모델 폴더(기본 {PRE_DIR})")
+    ap.add_argument("--zone-meta", help="구역 실면적·폭·출구 방향 JSON -> 5·10·15분 예측 + 경보(forecast_minutes.csv, alarms_minutes.csv)")
+    ap.add_argument("--detections", help="사람 박스 CSV(분 단위 예측의 사람 속도 계산용)")
+    ap.add_argument("--fps", type=float)
     a = ap.parse_args()
-    res = run_video_forecast(a.source, a.out_dir, tuple(a.horizons), tuple(a.models), a.base_time, anomaly=not a.no_anomaly, target=a.target, pre_dir=a.pre_dir)
+    res = run_video_forecast(a.source, a.out_dir, tuple(a.horizons), tuple(a.models), a.base_time, anomaly=not a.no_anomaly, target=a.target,
+                             pre_dir=a.pre_dir, zone_meta=a.zone_meta, detections_csv=a.detections, fps=a.fps)
     i = res["info"]
     print(f"예측: {res['forecast_path']} ({i['rows']}행) | 이상 이벤트: {res['anomaly_path']} ({i['anomaly_events']}건, 단계 이벤트 {i['level_events']}) | 영상 {i['seconds']}초, 구역 {i['zones']}")
-    print(pd.DataFrame(i["backtest"]).T.to_string()); print("Isolation Forest:", i.get("iforest"), "| 병목:", i.get("bottleneck"))
+    if i["backtest"]:
+        print(pd.DataFrame(i["backtest"]).T.to_string())
+    print("Isolation Forest:", i.get("iforest"), "| 병목:", i.get("bottleneck"))
+    if res["minute_forecast_path"]:
+        m = i["minutes"]
+        print(f"분 단위: {res['minute_forecast_path']} ({m['rows']}행) | 경보: {res['minute_alarm_path']} ({m['alarms']}건) | 모델 {m['model_version']}")
+        print(pd.DataFrame(m["backtest"]).T.to_string())
 
 
 if __name__ == "__main__":
