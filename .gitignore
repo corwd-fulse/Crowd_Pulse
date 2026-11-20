@@ -68,3 +68,9 @@ forecast/__pycache__/
 
 # Optional portable media tools; no Python environment changes
 /.tools/
+
+# forecast/bottleneck: 시뮬레이션 결과는 sim_dataset.py로 다시 만든다(72MB). 설정·보정값·실행 결과 요약만 올린다
+data/simcrowd/*
+!data/simcrowd/scenarios.csv
+forecast/bottleneck/runs/*/models/
+forecast/bottleneck/runs/*/*.parquet

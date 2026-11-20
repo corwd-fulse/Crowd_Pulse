@@ -1,0 +1,32 @@
+{
+ "best": {
+  "desired_speed": 1.574730891592502,
+  "time_gap": 0.8114165022422192,
+  "radius": 0.13539113460604,
+  "strength_neighbor_repulsion": 8.38005601861395,
+  "range_neighbor_repulsion": 0.0647567047170937
+ },
+ "default": {
+  "desired_speed": 1.2,
+  "time_gap": 1.0,
+  "radius": 0.2,
+  "strength_neighbor_repulsion": 8.0,
+  "range_neighbor_repulsion": 0.1
+ },
+ "train": [
+  "010_c_12_h0",
+  "110_c_12_h0",
+  "030_c_56_h0",
+  "050_c_45_h0",
+  "070_c_23_h0",
+  "190_q_34_h0"
+ ],
+ "test": [
+  "090_c_12_h0",
+  "170_q_12_h0",
+  "150_q_56_h0",
+  "250_q_45_h0",
+  "230_q_23_h0",
+  "270_c_34_h0"
+ ]
+}
