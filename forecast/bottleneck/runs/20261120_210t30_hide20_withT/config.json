@@ -1,0 +1,33 @@
+{
+ "out": "20261120_210t30_hide20_withT",
+ "script": "sim_announce",
+ "hide_train": 0.2,
+ "hide_test": 0.4,
+ "shapes": "straight,bottleneck,tjunction",
+ "sched_noise": {
+  "time_s": 180,
+  "size": 0.3
+ },
+ "thresholds": [
+  3.0,
+  2.0
+ ],
+ "window_s": 900,
+ "correction_w": [
+  [
+   0.0,
+   0.901
+  ],
+  [
+   0.003,
+   0.914
+  ],
+  [
+   0.014,
+   0.764
+  ]
+ ],
+ "model": "LightGBM",
+ "n_scenarios": 210,
+ "created": "2026-11-20 15:07"
+}

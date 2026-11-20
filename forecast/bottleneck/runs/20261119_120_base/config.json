@@ -1,0 +1,8 @@
+{
+ "out": "20261119_120_base",
+ "schedule": false,
+ "seeds": 3,
+ "n_scenarios": 120,
+ "shapes": {"straight": 60, "bottleneck": 60},
+ "note": "run 폴더 도입 전(11-19 17:10) 실행 결과를 옮겨 둔 것. config는 나중에 손으로 적음."
+}

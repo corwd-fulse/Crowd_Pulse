@@ -1,0 +1,56 @@
+{
+ "out": "20261120_120_sched_6m50",
+ "schedule": true,
+ "seeds": 3,
+ "horizons_s": [
+  300,
+  600,
+  900
+ ],
+ "step_s": 10,
+ "hist_bins": 90,
+ "sched_noise": {
+  "time_s": 360.0,
+  "size": 0.5
+ },
+ "shapes_arg": "straight,bottleneck",
+ "n_scenarios": 120,
+ "shapes": {
+  "straight": 60,
+  "bottleneck": 60
+ },
+ "features": [
+  "n",
+  "density",
+  "speed",
+  "speed_1m",
+  "speed_5m",
+  "heading",
+  "in_1m",
+  "out_1m",
+  "dn_1m",
+  "in_5m",
+  "out_5m",
+  "dn_5m",
+  "in_15m",
+  "out_15m",
+  "dn_15m",
+  "in_trend",
+  "in_right_share_5m",
+  "is_bottleneck",
+  "is_tjunction",
+  "width",
+  "exit_width",
+  "entry_width",
+  "area",
+  "cap",
+  "in_cap",
+  "plan_in_5m",
+  "plan_in_10m",
+  "plan_in_15m",
+  "plan_next_in",
+  "plan_next_h"
+ ],
+ "git_commit": "3bc6118",
+ "created": "2026-11-20 10:35"
+}

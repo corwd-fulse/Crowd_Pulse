@@ -1,0 +1,123 @@
+{
+ "out": "20261120_180q_serve_h20",
+ "script": "sim_serving train",
+ "hide_train": 0.2,
+ "shapes": [
+  "straight",
+  "bottleneck"
+ ],
+ "horizons_s": [
+  300,
+  600,
+  900
+ ],
+ "features": {
+  "base": [
+   "n",
+   "density",
+   "speed",
+   "speed_1m",
+   "speed_5m",
+   "heading",
+   "in_1m",
+   "out_1m",
+   "dn_1m",
+   "in_5m",
+   "out_5m",
+   "dn_5m",
+   "in_15m",
+   "out_15m",
+   "dn_15m",
+   "in_trend",
+   "in_right_share_5m",
+   "is_bottleneck",
+   "is_tjunction",
+   "width",
+   "exit_width",
+   "entry_width",
+   "area",
+   "cap",
+   "in_cap"
+  ],
+  "sched": [
+   "n",
+   "density",
+   "speed",
+   "speed_1m",
+   "speed_5m",
+   "heading",
+   "in_1m",
+   "out_1m",
+   "dn_1m",
+   "in_5m",
+   "out_5m",
+   "dn_5m",
+   "in_15m",
+   "out_15m",
+   "dn_15m",
+   "in_trend",
+   "in_right_share_5m",
+   "is_bottleneck",
+   "is_tjunction",
+   "width",
+   "exit_width",
+   "entry_width",
+   "area",
+   "cap",
+   "in_cap",
+   "plan_in_5m",
+   "plan_in_10m",
+   "plan_in_15m",
+   "plan_next_in",
+   "plan_next_h"
+  ]
+ },
+ "use_model": {
+  "base": {
+   "5m": true,
+   "10m": true,
+   "15m": true
+  },
+  "sched": {
+   "5m": true,
+   "10m": true,
+   "15m": true
+  }
+ },
+ "train_p01": {
+  "in_cap": 0.001,
+  "in_5m": 1.0
+ },
+ "val_mae_model_vs_persist": {
+  "base": {
+   "5m": [
+    38.35,
+    49.76
+   ],
+   "10m": [
+    64.76,
+    77.97
+   ],
+   "15m": [
+    82.61,
+    94.12
+   ]
+  },
+  "sched": {
+   "5m": [
+    35.4,
+    49.76
+   ],
+   "10m": [
+    54.36,
+    77.97
+   ],
+   "15m": [
+    71.04,
+    94.12
+   ]
+  }
+ },
+ "n_scenarios": 180,
+ "created": "2026-11-20 12:33"
+}

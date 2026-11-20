@@ -1,0 +1,31 @@
+{
+ "out": "20261120_120_announce_v2",
+ "script": "sim_announce",
+ "hide_train": 0.4,
+ "sched_noise": {
+  "time_s": 180,
+  "size": 0.3
+ },
+ "thresholds": [
+  3.0,
+  2.0
+ ],
+ "window_s": 900,
+ "correction_w": [
+  [
+   0.025,
+   1.436
+  ],
+  [
+   0.025,
+   1.606
+  ],
+  [
+   0.029,
+   1.613
+  ]
+ ],
+ "model": "LightGBM",
+ "n_scenarios": 120,
+ "created": "2026-11-20 11:20"
+}

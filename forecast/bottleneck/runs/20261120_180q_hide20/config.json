@@ -1,0 +1,32 @@
+{
+ "out": "20261120_180q_hide20",
+ "script": "sim_announce",
+ "hide_train": 0.2,
+ "hide_test": 0.4,
+ "sched_noise": {
+  "time_s": 180,
+  "size": 0.3
+ },
+ "thresholds": [
+  3.0,
+  2.0
+ ],
+ "window_s": 900,
+ "correction_w": [
+  [
+   0.017,
+   0.586
+  ],
+  [
+   0.02,
+   1.131
+  ],
+  [
+   0.026,
+   1.26
+  ]
+ ],
+ "model": "LightGBM",
+ "n_scenarios": 180,
+ "created": "2026-11-20 12:39"
+}
