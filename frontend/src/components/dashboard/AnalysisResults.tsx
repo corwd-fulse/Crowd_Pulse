@@ -5,6 +5,7 @@ import {api} from '../../services/api';
 import {bottleneckReason, crowdSeries, directionLabel, formatMetric, relativeSeconds} from '../../services/visionPresentation';
 import {useVisionResult} from '../../hooks/useVisionResult';
 import StartCard from './StartCard';
+import ModelComparisonPanel from './ModelComparisonPanel';
 
 const colors = ['#23cfff', '#ffc653', '#23e3bb', '#ff8db3', '#ab9bff'];
 
@@ -23,6 +24,7 @@ function ResultView({data}: {data: VisionResultBundle}) {
   const {summary} = data;
   const fast = summary.analysis_profile === 'fast';
   const scoreUnavailable = summary.components?.bottleneck === 'unanalyzed';
+  const [tab, setTab] = useState<'overview' | 'comparison'>('overview');
   const [region, setRegion] = useState('');
   const [page, setPage] = useState(0);
   const metrics = data.metrics.filter((row) => !region || row.region_key === region);
@@ -56,6 +58,13 @@ function ResultView({data}: {data: VisionResultBundle}) {
         <p className="mt-1 text-xs text-muted">분석 완료 {new Date(summary.analysis_finished_at).toLocaleString('ko-KR')} · 아래 시간은 영상 시작 기준 상대 시간입니다.</p>
         {!summary.direction_presentation.confirmed_for_display && <p className="mt-2 text-xs text-warn">방향값은 검증 전 또는 사용 제한 데이터입니다. 결과 생성 성공은 방향 품질 승인을 의미하지 않습니다.</p>}
       </div>
+
+      <div role="tablist" aria-label="분석 결과 탭" className="flex gap-2 border-b border-line text-sm">
+        <button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`px-4 py-2 ${tab === 'overview' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>기본 결과</button>
+        <button type="button" role="tab" aria-selected={tab === 'comparison'} onClick={() => setTab('comparison')} className={`px-4 py-2 ${tab === 'comparison' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>AI 모델 비교</button>
+      </div>
+
+      {tab === 'comparison' ? <ModelComparisonPanel jobId={summary.analysis_job_id} videoId={summary.video_id} /> : <>
 
       <div className="summary-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StartCard featured title="구역 최고 평균 인원" value={values.length ? `${formatMetric(values.reduce((peak, value) => Math.max(peak, value), 0))}명` : '—'} description="구역·초별 평균 중 최댓값" />
@@ -98,6 +107,7 @@ function ResultView({data}: {data: VisionResultBundle}) {
       </div>
 
       <div className="rounded-lg border border-line bg-surface p-5 text-xs text-muted"><h3 className="mb-2 font-semibold text-ink">결과 CSV ({Object.keys(summary.artifacts).length}개)</h3><p className="mb-3">개인 방향 원시값과 reliable은 CSV에 보존됩니다. n_tracks는 고유 인원수가 아닌 표본 수이고 speed_px는 실제 속도가 아닙니다.</p><div className="flex flex-wrap gap-3">{Object.entries(summary.artifacts).map(([kind, artifact]) => <a key={kind} className="text-brand underline" href={api.getUri({url: artifact.download_url})}>{kind} · {artifact.rows.toLocaleString()}행</a>)}</div></div>
+      </>}
     </section>
   );
 }

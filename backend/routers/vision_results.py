@@ -1,4 +1,5 @@
 """Explicit result import only; no inference scheduling or server path input."""
+from collections import defaultdict
 import json
 from pathlib import Path
 import tempfile
@@ -226,6 +227,107 @@ def bottleneck_scores(job_id: UUID, region_key: str | None = None,
     rows = db.scalars(query.order_by(VisionBottleneckScore.window_start_ms, VisionBottleneckScore.region_key).offset(offset).limit(limit)).all()
     return {'items': [{c.name:getattr(row,c.name) for c in row.__table__.columns} for row in rows], 'limit':limit, 'offset':offset,
             'component_status': component_status(result)['bottleneck']}
+
+
+@router.get('/{job_id}/results/dmcount-estimates')
+def dmcount_estimates(job_id: UUID, db: Session = Depends(get_db)):
+    """DM-Count(density_estimation.py) 참고 추정치. YOLO+ByteTrack과 완전히 별개 모델이고
+    정확도가 검증되지 않았으므로(실측 실험에서 영상 조건에 따라 10~120% 차이) 병목/위험도
+    계산에 쓰이지 않는다 — accuracy_status로 항상 명시해 프론트가 참고용 배지를 띄우게 한다.
+    같은 window_start/zone 기준으로 /results/zone-metrics의 YOLO 카운트와 나란히 비교하도록
+    의도된 보조 엔드포인트."""
+    from app.services import vision_extended_results as extended_service
+    try:
+        result = extended_service.extended_result_for_job(db, job_id)
+    except extended_service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    if result.dmcount_estimates is None:
+        raise HTTPException(404, 'DM-Count was not run for this analysis job')
+    return {
+        'analysis_job_id': job_id,
+        'items': result.dmcount_estimates,
+        'accuracy_status': 'unverified',
+        'note': ('Reference estimate only, independent of YOLO+ByteTrack — not validated against '
+                 'ground truth and not used in bottleneck_scores or risk level calculations.'),
+    }
+
+
+@router.get('/{job_id}/results/dmcount-estimates/density-map/{filename}')
+def dmcount_density_map(job_id: UUID, filename: str, db: Session = Depends(get_db)):
+    """dmcount-estimates의 density_map_path가 가리키는 히트맵 PNG를 서빙한다. filename은
+    그 엔드포인트가 돌려준 값에서 그대로 가져온 것이어야 하며(우리 쪽이 만든 window_<n>.png
+    꼴), 다른 job의 파일이나 경로 조작을 걸러내기 위해 이 job 전용 디렉터리 밖은 404로 막는다
+    (artifact() 엔드포인트와 같은 경로 검증 패턴)."""
+    from app.services import vision_extended_results as extended_service
+    try:
+        result = extended_service.extended_result_for_job(db, job_id)
+    except extended_service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    if result.dmcount_estimates is None:
+        raise HTTPException(404, 'DM-Count was not run for this analysis job')
+    # 저장 시점의 실제 상대경로를 그대로 쓴다(import 임시 디렉터리 이름이 매번 랜덤이라
+    # 고정 패턴으로 재구성할 수 없음, vision_extended_results._persist_density_maps 참고).
+    # basename이 겹칠 일은 없다 — window_<n>.png는 job마다 별도 디렉터리에 저장된다.
+    known_paths = {Path(row['density_map_path']).name: row['density_map_path']
+                   for row in result.dmcount_estimates if row.get('density_map_path')}
+    if filename not in known_paths:
+        raise HTTPException(404, 'Density map image not found')
+    path = (extended_service.BASE_DIR / known_paths[filename]).resolve()
+    if not path.is_relative_to((extended_service.BASE_DIR / 'uploads/results').resolve()) or not path.is_file():
+        raise HTTPException(404, 'Density map image unavailable')
+    return FileResponse(path, media_type='image/png', filename=filename)
+
+
+@router.get('/{job_id}/results/model-comparison')
+def model_comparison(job_id: UUID, db: Session = Depends(get_db)):
+    """같은 window_start(10초 단위)·zone 기준으로 YOLO 구역 카운트와 DM-Count 추정치를
+    나란히 묶어서 낸다 — 프론트 'AI 모델 비교' 탭이 그래프/히트맵을 그리는 단일 소스.
+    YOLO는 vision_zone_metrics(초 단위)를 그 윈도우 안에서 평균 내 맞춘다. 병목 점수에는
+    어느 쪽도 반영하지 않으며, accuracy_status로 DM-Count 쪽이 미검증임을 항상 명시한다."""
+    from app.services import vision_extended_results as extended_service
+    from app.services.density_estimation import WINDOW_S
+
+    result = get_result(job_id, db)
+    try:
+        extended = extended_service.extended_result_for_job(db, job_id)
+    except extended_service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    if extended.dmcount_estimates is None:
+        raise HTTPException(404, 'DM-Count was not run for this analysis job')
+
+    yolo_rows = db.scalars(select(VisionZoneMetric).where(
+        VisionZoneMetric.analysis_job_id == job_id,
+        VisionZoneMetric.imported_at == result.imported_at,
+        VisionZoneMetric.has_observation.is_(True),
+    )).all()
+    yolo_by_window = defaultdict(list)
+    for row in yolo_rows:
+        window_start = (row.video_offset_ms // (WINDOW_S * 1000)) * WINDOW_S
+        yolo_by_window[(window_start, row.region_key)].append(float(row.mean_person_count))
+
+    items = []
+    for rec in extended.dmcount_estimates:
+        key = (rec['window_start'], rec['zone'])
+        yolo_samples = yolo_by_window.get(key)
+        density_map_path = rec.get('density_map_path')
+        items.append({
+            'job_id': job_id,
+            'zone': rec['zone'],
+            'window_start': rec['window_start'],
+            'yolo_count': round(sum(yolo_samples) / len(yolo_samples), 2) if yolo_samples else None,
+            'dmcount_estimated_count': rec['estimated_count'],
+            'dmcount_inference_ms': rec['inference_ms'],
+            'dmcount_model_version': rec['model_version'],
+            'density_map_path': (f'/api/analysis/jobs/{job_id}/results/dmcount-estimates/density-map/'
+                                  f'{Path(density_map_path).name}') if density_map_path else None,
+        })
+    return {
+        'analysis_job_id': job_id,
+        'items': items,
+        'accuracy_status': 'unverified',
+        'note': ('DM-Count is independent of YOLO+ByteTrack, not validated against ground truth, '
+                 'and not used in bottleneck_scores or risk level calculations — comparison only.'),
+    }
 
 
 @router.get('/{job_id}/results/artifacts/{kind}')

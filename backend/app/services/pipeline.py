@@ -165,11 +165,19 @@ def run_extended_zone_pipeline(
     motion_timeseries: pd.DataFrame | None = None,
     individual_directions: pd.DataFrame | None = None,
     frame_stride: int = 1,
+    dmcount_model_path: str | None = None,
+    dmcount_device: str = 'cpu',
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
 
     pixels_per_meter: 카메라 보정값이 있을 때만 전달(crowd_speed.py). 없으면(기본값) 속도는
     m/s로 환산하지 않고 그대로 생략한다 — 보정 없이 환산하면 틀린 값을 사실처럼 내보내게 된다.
+
+    dmcount_model_path: DM-Count(density_estimation.py) pretrained 체크포인트 경로가 있을
+    때만 전달(기본값 None=실행 안 함). YOLO와 완전히 독립된 별도 모델이고 CPU 추론이 느려서
+    (윈도우당 수 초~수십 초) 대부분의 job에서는 켜지 않는 opt-in 기능이다. 정확도가
+    YOLO 대비 검증되지 않았으므로(실측 실험에서 영상 조건에 따라 10~120% 가까이 벌어짐)
+    bottleneck_scores 등 어떤 계산에도 입력으로 쓰지 않고, 대시보드 참고 표시 전용이다.
 
     zone_timeseries/motion_timeseries/individual_directions: run_zone_pipeline()이 이미 계산한
     같은 값이 있으면 전달해서 재계산을 피한다. 특히 motion_timeseries(Optical Flow, Farneback)는
@@ -240,5 +248,13 @@ def run_extended_zone_pipeline(
             )
             paths["crowd_speed_individual"] = out / "crowd_speed_individual.csv"
             individual_speed.to_csv(paths["crowd_speed_individual"], index=False)
+
+    if dmcount_model_path is not None:
+        from .density_estimation import compute_dmcount_estimates
+
+        dmcount = compute_dmcount_estimates(video_path, zones, fps=fps, model_path=dmcount_model_path, device=dmcount_device,
+                                             heatmap_dir=out / "dmcount_heatmaps")
+        paths["dmcount_estimates"] = out / "dmcount_estimates.csv"
+        dmcount.to_csv(paths["dmcount_estimates"], index=False)
 
     return {k: str(v) for k, v in paths.items()}

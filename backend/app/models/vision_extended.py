@@ -43,3 +43,8 @@ class VisionExtendedResult(Base):
     # pixels_per_meter=None인 정상 케이스에서도 위반된다(실제 DB로 테스트하다 발견한 버그).
     crowd_speed_zone: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
     crowd_speed_individual: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))
+    # DM-Count(density_estimation.py)는 YOLO+ByteTrack과 완전히 독립된 모델이라 다른 보조
+    # 지표처럼 '계산됐으면 항상 있음'이 아니라 '대부분의 job에서는 아예 안 돈다'(느린 CPU
+    # 추론이라 opt-in). crowd_speed_zone과 같은 이유로 nullable — 정확도 미검증 참고
+    # 지표이므로 bottleneck_scores 등 어떤 계산에도 입력으로 쓰지 않는다.
+    dmcount_estimates: Mapped[list | None] = mapped_column(JSONB(none_as_null=True))

@@ -28,9 +28,10 @@ CSV_SCHEMAS = {
     'density_heatmap': ['window_start', 'cell_x', 'cell_y', 'count'],
     'crowd_speed_zone': ['sec', 'zone', 'speed_mps', 'low_confidence'],
     'crowd_speed_individual': ['frame', 't_ms', 'track_id', 'speed_mps', 'reliable'],
+    'dmcount_estimates': ['window_start', 'zone', 'estimated_count', 'inference_ms', 'model_version', 'density_map_path'],
 }
 REQUIRED_KINDS = {'dwell_times', 'counter_flow', 'queue_scores', 'density_heatmap'}
-OPTIONAL_KINDS = {'crowd_speed_zone', 'crowd_speed_individual'}
+OPTIONAL_KINDS = {'crowd_speed_zone', 'crowd_speed_individual', 'dmcount_estimates'}
 
 
 class InvalidExtendedResult(ValueError):
@@ -109,6 +110,21 @@ class CrowdSpeedIndividual(_Row):
     reliable: bool
 
 
+class DMCountEstimate(_Row):
+    window_start: Annotated[int, Field(ge=0)]
+    zone: str = Field(min_length=1, max_length=100)
+    estimated_count: Nonnegative
+    inference_ms: Nonnegative
+    model_version: str = Field(min_length=1, max_length=100)
+    # density_estimation.py가 heatmap_dir 없이 돌면 전부 빈 문자열(이미지 저장 안 함).
+    density_map_path: Annotated[str, Field(max_length=500)] | None
+
+    @field_validator('density_map_path', mode='before')
+    @classmethod
+    def empty_path_is_none(cls, value):
+        return None if value == '' else value
+
+
 CSV_MODELS = {
     'dwell_times': DwellTime,
     'counter_flow': CounterFlow,
@@ -116,6 +132,7 @@ CSV_MODELS = {
     'density_heatmap': DensityHeatmapCell,
     'crowd_speed_zone': CrowdSpeedZone,
     'crowd_speed_individual': CrowdSpeedIndividual,
+    'dmcount_estimates': DMCountEstimate,
 }
 
 

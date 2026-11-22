@@ -92,3 +92,69 @@ def test_speed_file_requires_calibration_value(db, seeded, bundle, tmp_path):
     stored = extended_storage.store_extended_result(db, seeded.id, paths, pixels_per_meter=50.0)
     assert stored.pixels_per_meter == 50.0
     assert stored.crowd_speed_zone[0]['speed_mps'] == 1.2
+
+
+@pytest.mark.integration
+def test_dmcount_estimates_are_independent_of_calibration(db, seeded, bundle, tmp_path):
+    # DM-Count는 YOLO+ByteTrack과 완전히 별개 모델이라 pixels_per_meter(카메라 보정) 유무와
+    # 무관하게 저장돼야 한다 — crowd_speed_zone과 달리 required-pairing 검증이 없다.
+    core_paths, roi, meta = bundle
+    vision_results.store_result(db, seeded.id, core_paths, roi, meta)
+
+    paths = _extended_paths(tmp_path, {
+        'dmcount_estimates': ('window_start,zone,estimated_count,inference_ms,model_version,density_map_path\n'
+                               '0,near,6.46,10889.8,dmcount_qnrf,\n'),
+    })
+    stored = extended_storage.store_extended_result(db, seeded.id, paths)  # 보정값 없이도 저장돼야 함
+
+    assert stored.dmcount_estimates == [{
+        'window_start': 0, 'zone': 'near', 'estimated_count': 6.46,
+        'inference_ms': 10889.8, 'model_version': 'dmcount_qnrf', 'density_map_path': None,
+    }]
+    assert stored.pixels_per_meter is None
+
+
+@pytest.mark.integration
+def test_dmcount_density_map_image_is_copied_into_permanent_storage(db, seeded, bundle, tmp_path):
+    # vision_extended_results.py는 vision_results.BASE_DIR을 `from ... import` 시점에
+    # 복사해 가지므로, seeded 픽스처가 vision_results.BASE_DIR만 monkeypatch해도
+    # extended_storage가 실제로 쓰는 BASE_DIR은 그대로다 — 저장 위치를 찾을 땐 그 값을 써야 한다.
+    base_dir = extended_storage.BASE_DIR
+
+    core_paths, roi, meta = bundle
+    vision_results.store_result(db, seeded.id, core_paths, roi, meta)
+
+    # density_estimation.py가 실제로 쓰는 임시 PNG를 흉내낸다 — dmcount_estimates.csv와
+    # 같은 디렉터리(tmp_path) 밑이라 신뢰 경계(trusted_root) 안이다.
+    heatmap_src = tmp_path / 'window_0.png'
+    heatmap_src.write_bytes(b'\x89PNG\r\n\x1a\nfake-png-bytes')
+
+    paths = _extended_paths(tmp_path, {
+        'dmcount_estimates': ('window_start,zone,estimated_count,inference_ms,model_version,density_map_path\n'
+                               f'0,near,6.46,10889.8,dmcount_qnrf,{heatmap_src}\n'),
+    })
+    stored = extended_storage.store_extended_result(db, seeded.id, paths)
+
+    saved_relative_path = stored.dmcount_estimates[0]['density_map_path']
+    assert saved_relative_path != str(heatmap_src)  # 원본 임시 경로가 아니라 BASE_DIR 상대경로로 바뀜
+    saved_path = base_dir / saved_relative_path
+    try:
+        assert saved_path.is_file()
+        assert saved_path.read_bytes() == heatmap_src.read_bytes()
+    finally:
+        saved_path.unlink(missing_ok=True)  # 이 테스트가 실제 repo uploads/results/ 밑에 남기는 파일 정리
+
+
+@pytest.mark.integration
+def test_dmcount_density_map_path_outside_trusted_root_is_rejected(db, seeded, bundle, tmp_path):
+    core_paths, roi, meta = bundle
+    vision_results.store_result(db, seeded.id, core_paths, roi, meta)
+
+    outside = tmp_path.parent / 'outside_window_0.png'
+    outside.write_bytes(b'not-trusted')
+    paths = _extended_paths(tmp_path, {
+        'dmcount_estimates': ('window_start,zone,estimated_count,inference_ms,model_version,density_map_path\n'
+                               f'0,near,6.46,10889.8,dmcount_qnrf,{outside}\n'),
+    })
+    with pytest.raises(InvalidExtendedResult):
+        extended_storage.store_extended_result(db, seeded.id, paths)

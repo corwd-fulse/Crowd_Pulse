@@ -105,6 +105,7 @@ class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
                  extended_pipeline=None, pixels_per_meter=None, enable_extended=False, frame_stride=1,
+                 dmcount_model_path=None,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
                  flow_method='full_frame'):
         self.bind = bind
@@ -132,6 +133,9 @@ class Worker:
         # byte-for-byte the same behavior as before it existed. Only --enable-extended-analysis
         # (or passing enable_extended=True directly) turns this on.
         self.enable_extended = enable_extended
+        # None(기본) = 이 job에서 DM-Count 안 돌림. 느린 CPU 추론에 정확도 미검증이라
+        # (density_estimation.py 모듈 docstring 참고) 명시적으로 체크포인트 경로를 줄 때만 켜진다.
+        self.dmcount_model_path = dmcount_model_path
         if type(frame_stride) is not int or frame_stride < 1:
             raise ValueError('frame_stride must be a positive int')
         self.frame_stride = frame_stride
@@ -575,6 +579,8 @@ class Worker:
                         zone_timeseries=pd.read_csv(paths['crowd_observations']),
                         motion_timeseries=pd.read_csv(paths['flow']),
                         individual_directions=pd.read_csv(paths['individual_directions']),
+                        dmcount_model_path=self.dmcount_model_path,
+                        dmcount_device=self.device,
                     )
                     extended_paths = {kind:Path(path).resolve() for kind,path in extended_paths.items()}
                     if any(not p.is_relative_to(out.resolve()) for p in extended_paths.values()):
@@ -622,6 +628,8 @@ def main():
                         help='Also compute and store dwell/counter-flow/queue/heatmap/tracking-quality metrics (FULL profile only)')
     parser.add_argument('--frame-stride',type=int,default=1,
                         help='Run Optical Flow every N frames instead of every frame on long FULL videos (default 1: unchanged, every frame)')
+    parser.add_argument('--dmcount-model-path',type=Path,default=None,
+                        help='DM-Count pretrained checkpoint; omit (default) to skip this slow, accuracy-unverified reference metric entirely')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
@@ -635,6 +643,10 @@ def main():
         parser.error('frame-stride must be a positive int')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
+    if args.dmcount_model_path is not None and not args.enable_extended_analysis:
+        parser.error('dmcount-model-path has no effect without --enable-extended-analysis')
+    if args.dmcount_model_path is not None and (not args.dmcount_model_path.is_file() or args.dmcount_model_path.stat().st_size == 0):
+        parser.error('dmcount-model-path must point to an existing local checkpoint; no automatic download')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
     if args.flow_method == 'roi_crop_128' and (args.device == 'cpu' or not args.allow_test_analysis or args.job_id is None):
@@ -642,7 +654,8 @@ def main():
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
                   scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
                   pixels_per_meter=args.pixels_per_meter,enable_extended=args.enable_extended_analysis,
-                  frame_stride=args.frame_stride,flow_method=args.flow_method)
+                  frame_stride=args.frame_stride,flow_method=args.flow_method,
+                  dmcount_model_path=args.dmcount_model_path)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)

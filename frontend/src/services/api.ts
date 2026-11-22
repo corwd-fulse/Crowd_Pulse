@@ -313,6 +313,36 @@ export async function getAnalysisJob(jobId: string, signal?: AbortSignal): Promi
   return response.data;
 }
 
+export interface ModelComparisonItem {
+  job_id: string;
+  zone: string;
+  window_start: number; // seconds, 10초 윈도우 (backend density_estimation.WINDOW_S와 동일)
+  yolo_count: number | null; // 같은 윈도우에 YOLO 관측이 없으면 null(비교 시점 불일치)
+  dmcount_estimated_count: number;
+  dmcount_inference_ms: number;
+  dmcount_model_version: string;
+  density_map_path: string | null; // 상대 API 경로, 없으면 히트맵 미저장
+}
+
+export interface ModelComparisonResponse {
+  analysis_job_id: string;
+  items: ModelComparisonItem[];
+  accuracy_status: 'unverified';
+  note: string;
+}
+
+export async function getModelComparison(jobId: string, signal?: AbortSignal): Promise<ModelComparisonResponse | null> {
+  try {
+    return (await api.get<ModelComparisonResponse>(
+      `/api/analysis/jobs/${encodeURIComponent(jobId)}/results/model-comparison`, {signal}
+    )).data;
+  } catch (error) {
+    // DM-Count를 이 job에서 실행하지 않은 경우 서버가 404를 준다 — 에러가 아니라 "결과 없음"으로 구분.
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function uploadVideo(
   file: File
 ): Promise<VideoUploadResponse> {
