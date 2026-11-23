@@ -1,6 +1,6 @@
 // Keep aligned with backend/routers/videos.py.
 export const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.avi', '.webm'];
-export const MAX_VIDEO_SIZE = 3 * 1024 * 1024 * 1024;
+export const MAX_VIDEO_SIZE = 4 * 1024 * 1024 * 1024;
 
 export function validateVideo(file: Pick<File, 'name' | 'size'>): string | null {
   const extension = file.name.slice(file.name.lastIndexOf('.')).toLowerCase();
@@ -8,7 +8,7 @@ export function validateVideo(file: Pick<File, 'name' | 'size'>): string | null 
     return 'MP4, MOV, AVI, WEBM 형식의 영상만 업로드할 수 있습니다.';
   }
   if (file.size > MAX_VIDEO_SIZE) {
-    return '영상 크기는 최대 3GiB (3,221,225,472바이트)까지 허용됩니다.';
+    return '영상 크기는 최대 4GiB (4,294,967,296바이트)까지 허용됩니다.';
   }
   return null;
 }
