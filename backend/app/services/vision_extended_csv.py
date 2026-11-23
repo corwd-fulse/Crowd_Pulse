@@ -15,7 +15,7 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
-from app.services.vision_csv import MAX_FILE_BYTES, Row as _CoreRow
+from app.services.vision_csv import MAX_FILE_BYTES, Row as _CoreRow, stream_sha256
 
 Nonnegative = Annotated[float, Field(ge=0)]
 Unit = Annotated[float, Field(ge=0, le=1)]
@@ -178,7 +178,7 @@ def validate_extended_bundle(paths: dict[str, Path]) -> tuple[dict[str, dict], d
     manifest, records = {}, {}
     for kind, path in paths.items():
         with path.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+            digest = stream_sha256(stream)
         if kind == 'tracking_quality':
             try:
                 data = TrackingQuality.model_validate_json(path.read_text(encoding='utf-8')).model_dump()

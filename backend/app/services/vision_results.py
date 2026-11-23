@@ -11,7 +11,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.models import AnalysisJob, Video, VisionResult, VisionZoneMetric, VisionBottleneckScore
-from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle, DiskRows
+from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle, DiskRows, stream_sha256
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -79,7 +79,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
         if not video_path.is_relative_to((BASE_DIR / 'uploads/videos').resolve()) or not video_path.is_file():
             raise InvalidResult('Registered source video is missing or outside uploads/videos')
         with video_path.open('rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != metadata.video_sha256:
+            if stream_sha256(stream) != metadata.video_sha256:
                 raise InvalidResult('Execution video hash differs from the registered video')
         root = BASE_DIR / 'uploads/results' / str(job_id)
         root.mkdir(parents=True, exist_ok=True)
@@ -89,7 +89,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
             shutil.copyfile(source, destination)
             # Hash copied bytes as well; reject changed source files (TOCTOU).
             with destination.open('rb') as stream:
-                if hashlib.file_digest(stream, 'sha256').hexdigest() != manifest[kind]['sha256']:
+                if stream_sha256(stream) != manifest[kind]['sha256']:
                     raise InvalidResult('CSV changed during import')
             manifest[kind]['path'] = destination.relative_to(BASE_DIR).as_posix()
             if isinstance(records[kind],DiskRows):

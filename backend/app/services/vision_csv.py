@@ -11,6 +11,14 @@ from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+
+def stream_sha256(stream) -> str:
+    """hashlib.file_digest 대체: 3.11+ 전용이라 Python 3.10 GPU 서버 worker에서 AttributeError가 난다."""
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+        digest.update(chunk)
+    return digest.hexdigest()
+
 Nonnegative = Annotated[float, Field(ge=0)]
 Count = Annotated[int, Field(ge=0, le=2**63-1)]
 Angle = Annotated[float, Field(ge=0, lt=360)]
@@ -204,7 +212,7 @@ def validate_bundle(paths: dict[str, Path], roi: dict, metadata: ExecutionMetada
         if path.stat().st_size > MAX_STREAM_FILE_BYTES:
             raise InvalidResult('CSV exceeds bounded streaming file budget (2GiB)')
         with path.open('rb') as stream:
-            digest = hashlib.file_digest(stream, 'sha256').hexdigest()
+            digest = stream_sha256(stream)
         if shutil.disk_usage(tempfile.gettempdir()).free < path.stat().st_size*4+256*1024**2:
             raise InvalidResult('Insufficient disk reserve for streaming duplicate validation')
         rows, missing, count = [], {name: 0 for name in SCHEMAS[kind]}, 0

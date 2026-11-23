@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.models import AnalysisJob, VisionExtendedResult, VisionResult
 from app.services.vision_extended_csv import InvalidExtendedResult, validate_extended_bundle
+from app.services.vision_csv import stream_sha256
 from app.services.vision_results import BASE_DIR, JobNotFound, ResultConflict, _cleanup_created_dir
 
 
@@ -88,7 +89,7 @@ def store_extended_result(
             destination = created_dir / f'{kind}{suffix}'
             shutil.copyfile(source, destination)
             with destination.open('rb') as stream:
-                if hashlib.file_digest(stream, 'sha256').hexdigest() != manifest[kind]['sha256']:
+                if stream_sha256(stream) != manifest[kind]['sha256']:
                     raise InvalidExtendedResult('File changed during import')
             manifest[kind]['path'] = destination.relative_to(BASE_DIR).as_posix()
 
