@@ -31,6 +31,8 @@ STATE_FILE=${STATE_FILE:-"$BACKEND/uploads/.gpu_synced"}
 SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30)
 
 touch "$STATE_FILE"
+# ssh -n: 이 함수는 while-read 루프 안에서 불리므로, stdin(영상 목록)을 ssh가 먹지 않게 한다.
+rssh() { ssh -n "${SSH_OPTS[@]}" "$GPU_HOST" "$@"; }
 log() { printf '%s %s\n' "$(date '+%F %T')" "$*"; }
 
 list_videos() {
@@ -56,26 +58,26 @@ sync_one() {
     fi
 
     local remote_size
-    remote_size=$(ssh "${SSH_OPTS[@]}" "$GPU_HOST" "stat -c %s $GPU_BACKEND_DIR/$path 2>/dev/null || echo none")
+    remote_size=$(rssh "stat -c %s $GPU_BACKEND_DIR/$path 2>/dev/null || echo none")
     if [[ $remote_size == "$size" ]]; then
         echo "$path" >> "$STATE_FILE"; log "ALREADY on GPU: $path"; return 0
     fi
 
     log "COPY $path ($size bytes)"
     local started=$SECONDS
-    ssh "${SSH_OPTS[@]}" "$GPU_HOST" "mkdir -p $GPU_BACKEND_DIR/uploads/videos" || return 1
-    if ! scp -q "${SSH_OPTS[@]}" "$local_file" "$GPU_HOST:$GPU_BACKEND_DIR/$path.part"; then
+    rssh "mkdir -p $GPU_BACKEND_DIR/uploads/videos" || return 1
+    if ! scp -q "${SSH_OPTS[@]}" "$local_file" "$GPU_HOST:$GPU_BACKEND_DIR/$path.part" </dev/null; then
         log "FAIL scp: $path"; return 1
     fi
     local local_sha remote_sha
     local_sha=$(sha256sum "$local_file" | cut -c1-64)
-    remote_sha=$(ssh "${SSH_OPTS[@]}" "$GPU_HOST" "sha256sum $GPU_BACKEND_DIR/$path.part | cut -c1-64")
+    remote_sha=$(rssh "sha256sum $GPU_BACKEND_DIR/$path.part | cut -c1-64")
     if [[ $local_sha != "$remote_sha" ]]; then
         log "FAIL sha256 mismatch, removing partial: $path"
-        ssh "${SSH_OPTS[@]}" "$GPU_HOST" "rm -f $GPU_BACKEND_DIR/$path.part"
+        rssh "rm -f $GPU_BACKEND_DIR/$path.part"
         return 1
     fi
-    ssh "${SSH_OPTS[@]}" "$GPU_HOST" "mv $GPU_BACKEND_DIR/$path.part $GPU_BACKEND_DIR/$path" || return 1
+    rssh "mv $GPU_BACKEND_DIR/$path.part $GPU_BACKEND_DIR/$path" || return 1
     echo "$path" >> "$STATE_FILE"
     local secs=$((SECONDS - started)); ((secs == 0)) && secs=1
     log "DONE $path in ${secs}s ($((size / secs / 1024 / 1024)) MiB/s, sha256 ok)"
