@@ -353,7 +353,7 @@ export async function uploadVideo(
     '/api/videos/upload',
     formData,
     {
-      timeout: 120000,
+      timeout: 30 * 60 * 1000,
     }
   );
 

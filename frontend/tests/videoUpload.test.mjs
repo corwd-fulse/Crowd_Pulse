@@ -15,11 +15,11 @@ test('backend extensions are accepted regardless of case or browser MIME type', 
   }
 });
 
-test('300MiB boundary matches backend, including its acceptance of empty files', () => {
+test('3GiB boundary matches backend, including its acceptance of empty files', () => {
   for (const size of [0, MAX_VIDEO_SIZE - 1, MAX_VIDEO_SIZE]) {
     assert.equal(validateVideo({name: 'clip.mp4', size}), null);
   }
-  assert.match(validateVideo({name: 'clip.mp4', size: MAX_VIDEO_SIZE + 1}), /300MiB/);
+  assert.match(validateVideo({name: 'clip.mp4', size: MAX_VIDEO_SIZE + 1}), /3GiB/);
 });
 
 // Load the Vite module under Node without needing a browser or live upload server.
@@ -45,7 +45,7 @@ test('upload sends the original file as multipart and returns actual response fi
   api.defaults.adapter = async (config) => {
     assert.equal(config.method, 'post');
     assert.equal(config.url, '/api/videos/upload');
-    assert.equal(config.timeout, 120000);
+    assert.equal(config.timeout, 30 * 60 * 1000);
     assert.ok(config.data instanceof FormData);
     const uploaded = config.data.get('file');
     assert.equal(uploaded.name, file.name);

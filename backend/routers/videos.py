@@ -29,7 +29,7 @@ UPLOAD_DIR = BASE_DIR / "uploads" / "videos"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".mp4", ".mov", ".avi", ".webm"}
-MAX_FILE_SIZE = 300 * 1024 * 1024  # 300MiB
+MAX_FILE_SIZE = 3 * 1024 * 1024 * 1024  # 3GiB
 
 
 # =====================================
@@ -85,7 +85,7 @@ def upload_video(
                 if total_size > MAX_FILE_SIZE:
                     raise HTTPException(
                         status_code=413,
-                        detail="영상 크기는 최대 300MB까지 허용됩니다.",
+                        detail="영상 크기는 최대 3GiB까지 허용됩니다.",
                     )
 
                 destination.write(chunk)

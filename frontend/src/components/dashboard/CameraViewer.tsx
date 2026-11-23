@@ -336,7 +336,7 @@ export default function CameraViewer({onJobCreated, trackedJob, venueId='main'}:
         className="border-t border-line bg-sunken px-5 py-3 text-xs text-ink-soft"
       >
         <p className="text-muted">
-          MP4 · MOV · AVI · WEBM / 최대 300MiB
+          MP4 · MOV · AVI · WEBM / 최대 3GiB
         </p>
 
         <p role="status" className="mt-1" aria-live="polite">
