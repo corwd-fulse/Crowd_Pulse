@@ -62,14 +62,26 @@ def _load_model(model_path: Path, device: str):
     return _model_cache[key]
 
 
-def _estimator_from_model(model_path: Path, device: str) -> DensityFn:
+# DM-Count 학습 코드(upstream datasets/crowd.py)와 같은 ImageNet 정규화. 이게 빠지면 입력
+# 분포가 학습 때와 달라져 density 합이 크게 줄어든다(야간 CCTV 실측: YOLO 대비 6% → 37%).
+_TO_INPUT = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
+
+
+def _estimator_from_model(model_path: Path, device: str, input_scale: float = 1.0) -> DensityFn:
     import torch
 
     model = _load_model(model_path, device)
 
     def estimate(frame_bgr: np.ndarray) -> tuple[np.ndarray, float]:
+        # input_scale>1: 멀리 작게 찍힌 사람을 QNRF 학습 때 크기에 가깝게 키운다. density map
+        # 합은 인원수라 해상도가 바뀌어도 그대로 쓰고, ROI 마스크는 map 크기에 맞춰 스케일된다.
+        if input_scale != 1.0:
+            frame_bgr = cv2.resize(frame_bgr, None, fx=input_scale, fy=input_scale, interpolation=cv2.INTER_CUBIC)
         img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
-        inp = transforms.ToTensor()(img).unsqueeze(0).to(device)
+        inp = _TO_INPUT(img).unsqueeze(0).to(device)
         start = time.perf_counter()
         with torch.no_grad():
             outputs, _ = model(inp)
@@ -127,6 +139,7 @@ def compute_dmcount_estimates(
     window_s: int = WINDOW_S,
     samples_per_window: int = 3,
     gamma: float = 1.0,
+    input_scale: float = 1.0,
     heatmap_dir: Path | str | None = None,
     density_fn: DensityFn | None = None,
 ) -> pd.DataFrame:
@@ -145,6 +158,9 @@ def compute_dmcount_estimates(
     gamma: 1.0(기본, 보정 없음)보다 크면 어두운 픽셀을 들어올리는 감마 보정을 모델 입력
     직전에 적용한다. 저조도 영상에서 pretrained 모델이 장면을 아예 못 읽는 문제(모듈
     docstring 참고)에 대한 대응.
+    input_scale: 모델 입력 전에 프레임을 확대/축소할 배율(기본 1.0). 사람이 작게 찍힌
+    한산한 장면에서 과소 추정을 줄인다. density_fn을 주입하면 적용되지 않는다(실제 모델
+    추정 함수 안에서 적용되므로).
     density_fn: 테스트에서 실제 가중치 없이 ROI 스케일링/집계/평균 로직만 검증하려 할 때
     주입하는 가짜 추정 함수. 생략하면(기본값) model_path의 실제 DM-Count 가중치로 추론한다.
     gamma 보정은 density_fn을 쓸 때도 똑같이 적용된다(추정 함수가 아니라 프레임 읽기
@@ -156,8 +172,10 @@ def compute_dmcount_estimates(
         raise ValueError("samples_per_window must be positive")
     if gamma <= 0:
         raise ValueError("gamma must be positive")
+    if input_scale <= 0:
+        raise ValueError("input_scale must be positive")
     device = check_device(device)
-    estimate = density_fn or _estimator_from_model(Path(model_path), device)
+    estimate = density_fn or _estimator_from_model(Path(model_path), device, input_scale)
     if heatmap_dir is not None:
         heatmap_dir = Path(heatmap_dir)
         heatmap_dir.mkdir(parents=True, exist_ok=True)

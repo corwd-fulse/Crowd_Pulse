@@ -167,6 +167,8 @@ def run_extended_zone_pipeline(
     frame_stride: int = 1,
     dmcount_model_path: str | None = None,
     dmcount_device: str = 'cpu',
+    dmcount_gamma: float = 1.0,
+    dmcount_input_scale: float = 1.0,
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
 
@@ -252,7 +254,13 @@ def run_extended_zone_pipeline(
     if dmcount_model_path is not None:
         from .density_estimation import compute_dmcount_estimates
 
+        # 보정 설정을 model_version에 남겨 대시보드/DB에서 어떤 입력 조건의 추정치인지 구분한다.
+        model_version = "dmcount_qnrf"
+        if dmcount_gamma != 1.0 or dmcount_input_scale != 1.0:
+            model_version += f"_g{dmcount_gamma:g}_s{dmcount_input_scale:g}"
         dmcount = compute_dmcount_estimates(video_path, zones, fps=fps, model_path=dmcount_model_path, device=dmcount_device,
+                                             model_version=model_version, gamma=dmcount_gamma,
+                                             input_scale=dmcount_input_scale,
                                              heatmap_dir=out / "dmcount_heatmaps")
         paths["dmcount_estimates"] = out / "dmcount_estimates.csv"
         dmcount.to_csv(paths["dmcount_estimates"], index=False)
