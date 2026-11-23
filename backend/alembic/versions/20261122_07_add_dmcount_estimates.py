@@ -1,7 +1,7 @@
 """Store DM-Count density-map estimates as a supplementary reference metric (FR-DEN-01/02, P2).
 
 Revision ID: 20261122_07
-Revises: 20261112_06
+Revises: 20261120_12
 
 Same JSONB-bundle pattern as the rest of vision_extended_results.py (dwell_times,
 queue_scores, etc.) — DM-Count is a completely independent model from YOLO+ByteTrack
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 revision = '20261122_07'
-down_revision = '20261112_06'
+down_revision = '20261120_12'
 branch_labels = None
 depends_on = None
 
