@@ -145,6 +145,21 @@ def test_seek_mismatch_falls_back_to_single_core(tmp_path, monkeypatch, capsys):
     _assert_same(expected, out)
 
 
+def test_seconds_stay_inside_video_for_non_integer_fps(tmp_path):
+    # 실제 장시간 영상 fps 30.007에서 flow.csv가 영상 길이를 넘는 초를 내 저장 검증에 걸렸다.
+    # 같은 상황을 짧게 재현: 10.5fps로 기록하고 초 매핑은 tracker와 같은 t_ms // 1000이어야 한다.
+    video = tmp_path / "v.mp4"
+    _write_video(video, n=95, fps=10)
+    fps = 10.5
+    out = compute_zone_motion(str(video), ZONES, fps=fps)
+    last_frame = 94
+    assert out["sec"].max() == int(last_frame / fps * 1000) // 1000
+    assert out["sec"].max() < 95 / fps
+    # 정수 fps에서는 예전 식(frame // fps)과 같은 초를 낸다.
+    out10 = compute_zone_motion(str(video), ZONES, fps=10)
+    assert out10["sec"].max() == last_frame // 10
+
+
 def test_short_video_or_single_worker_uses_single_core(tmp_path, monkeypatch):
     video = tmp_path / "v.mp4"
     _write_video(video, n=30)

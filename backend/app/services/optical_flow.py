@@ -203,7 +203,10 @@ def _flow_step(frame, frame_idx: int, prev_gray, last_values: dict, acc: dict, z
     갈라지지 않게 한다. accumulate=False는 멀티코어 구간 앞쪽의 준비 프레임(이전 구간 몫)용.
     """
     x0, y0, x1, y1 = box
-    sec = frame_idx // int(round(fps))
+    # 다른 CSV(tracker t_ms → t_ms // 1000)와 같은 초 매핑. 예전의 frame_idx // round(fps)는
+    # fps가 정수가 아니면(예: 30.007) 영상 끝에서 실제 길이를 넘는 초를 만들어 결과 저장 검증
+    # (offset outside video)에 걸렸다. fps가 정수면 두 식의 결과는 같다.
+    sec = int(frame_idx / fps * 1000) // 1000
 
     if frame_idx % frame_stride == 0:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
