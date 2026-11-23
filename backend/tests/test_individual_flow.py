@@ -3,7 +3,8 @@ import csv
 import numpy as np
 import pandas as pd
 
-from app.services.individual_flow import compute_individual_directions, draw_direction_arrows
+from app.services.individual_flow import compute_counter_flow, compute_individual_directions, draw_direction_arrows
+from app.services.zone_analysis import Zone
 
 GRID_ANGLE_TOLERANCE = 1.0  # deg
 
@@ -60,6 +61,22 @@ def test_small_jitter_still_reliable_with_smoothing(tmp_path):
     last = out[out.frame == out.frame.max()].iloc[0]
     assert last.reliable
     assert abs(last.angle_deg - 0.0) < 15.0  # 창으로 묶어서 흔들림은 평균에 묻힘
+
+
+def test_counter_flow_detects_opposing_minority(tmp_path):
+    zone = Zone("A", [(0, 0), (1000, 0), (1000, 100), (0, 100)])
+    rows = [[f, f * 33, 1, f * 10, 10, f * 10 + 10, 20, 0.9] for f in range(10)]  # 오른쪽 (주류)
+    rows += [[f, f * 33, 2, 10 + f * 10, 30, 20 + f * 10, 40, 0.9] for f in range(10)]  # 오른쪽 (주류)
+    rows += [[f, f * 33, 3, 500 - f * 10, 60, 510 - f * 10, 70, 0.9] for f in range(10)]  # 왼쪽 (역방향)
+    csv_path = tmp_path / "det.csv"
+    _write_detections(csv_path, rows)
+
+    individual = compute_individual_directions(str(csv_path), window_frames=5)
+    out = compute_counter_flow(individual, str(csv_path), [zone], fps=30.0)
+
+    row = out[out.sec == 0].iloc[0]
+    assert abs(row.mean_angle_deg - 0.0) < 1.0
+    assert 0.0 < row.reverse_ratio < 1.0  # 왼쪽으로 가는 트랙 몫만큼만 역방향으로 잡혀야 함
 
 
 def test_arrow_length_scales_with_speed():

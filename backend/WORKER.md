@@ -154,6 +154,43 @@ token이 여전히 일치하는 running 작업만 failed로 바꾼다. 공개 er
 실패한 부분 출력도 보존하고 기존 출력·결과를 삭제/덮어쓰기하지 않는다.
 최종 CSV 사본은 기존 저장 서비스의 `uploads/results/{job_id}/import-.../`에도 보관된다.
 
+## 확장 분석 (밀집 히트맵/체류시간/역방향/대기열/추적품질, 2026-11-18)
+
+기본값은 꺼져 있다 — 위 11단계가 전부 끝나고 10~11단계의 핵심 결과가 이미 commit된
+**뒤에만**, `--enable-extended-analysis`를 줬을 때만(FULL 프로필에서만) 추가로 실행된다.
+
+```powershell
+.\.venv\Scripts\python.exe -m app.worker `
+  --model-path .\out\vision-pipeline-validation-20261112\yolo11m.pt `
+  --algorithm-version vision-baseline-v1 `
+  --enable-extended-analysis `
+  --pixels-per-meter 42.0   # 생략하면 군중 속도(m/s) 파일은 안 만들어짐
+```
+
+`pipeline.run_extended_zone_pipeline()`이 `run_zone_pipeline()`이 이미 만든
+crowd_observations/flow/individual_directions CSV를 다시 읽어 넘겨받아 Optical Flow
+(Farneback)를 영상 전체에 대해 또 돌리지 않는다. 결과는 `vision_extended_results.py`를
+거쳐 별도 테이블 `vision_extended_results`(JSONB 기반, core 테이블들만큼 정규화되지
+않음)에 저장되며, core `vision_results`가 이미 있어야만(FK) 쓸 수 있다. 이 단계가 실패해도
+`worker.log`에만 기록되고 이미 succeeded로 commit된 Job 상태는 바뀌지 않는다.
+`--pixels-per-meter` 없이 `--enable-extended-analysis`만 주면 속도 관련 두 파일만 생략된다.
+
+### 장시간 영상 속도 최적화 (`--frame-stride`)
+
+확장 분석과 별개로, FULL 프로필의 **core** 파이프라인(`run_zone_pipeline`)이 돌리는
+Optical Flow 자체도 느려질 수 있다. `--frame-stride N`을 주면 Farneback을 매 프레임이
+아니라 N프레임마다 한 번만 계산하고 그 사이는 직전 값을 그대로 쓴다(optical_flow.py의
+`frame_stride`, carry-forward). 기본값 1은 예전과 100% 동일하게 매 프레임 계산한다.
+`flow.csv`의 컬럼 모양은 바뀌지 않으므로 FR-ZON 저장 계약에는 영향이 없다 — 다만 N이
+클수록 그 사이 구간에서 방향이 급히 바뀌는 상황은 놓칠 수 있다(근사치, 주석 참고).
+
+```powershell
+--frame-stride 5   # Farneback을 5프레임마다 한 번만 계산
+```
+
+이 옵션은 `self.pipeline`을 테스트용 어댑터로 주입했을 때는(예: 4개 위치 인자만 받는
+legacy 함수) 전달되지 않는다 — 실제 `run_zone_pipeline`을 쓸 때만 적용된다.
+
 ## 중단·복구 정책
 
 - Ctrl+C/SIGTERM: 현재 작업을 중단하고 가능한 경우 failed와 종료 시각을 기록한다.

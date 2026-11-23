@@ -11,7 +11,7 @@ from sqlalchemy import insert, select
 from sqlalchemy.orm import Session
 
 from app.models import AnalysisJob, Video, VisionResult, VisionZoneMetric, VisionBottleneckScore
-from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle, DiskRows
+from app.services.vision_csv import ExecutionMetadata, InvalidResult, RISK_MAPPING, validate_bundle, DiskRows, stream_sha256
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 
@@ -22,6 +22,18 @@ class ResultConflict(ValueError):
 
 class JobNotFound(LookupError):
     pass
+
+
+def _cleanup_created_dir(created_dir: Path | None) -> None:
+    """Removes a just-created 'import-*' staging dir after a failed import, and only that
+    one — never anything it didn't just create itself. Shared with vision_extended_results.py,
+    which stores a separate kind of result under the same uploads/results root."""
+    if created_dir is None:
+        return
+    resolved = created_dir.resolve()
+    managed_root = (BASE_DIR / 'uploads/results').resolve()
+    if resolved.is_relative_to(managed_root) and resolved != managed_root and created_dir.name.startswith('import-'):
+        shutil.rmtree(created_dir)
 
 
 def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, metadata: ExecutionMetadata, *, worker_token: UUID | None = None):
@@ -67,7 +79,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
         if not video_path.is_relative_to((BASE_DIR / 'uploads/videos').resolve()) or not video_path.is_file():
             raise InvalidResult('Registered source video is missing or outside uploads/videos')
         with video_path.open('rb') as stream:
-            if hashlib.file_digest(stream, 'sha256').hexdigest() != metadata.video_sha256:
+            if stream_sha256(stream) != metadata.video_sha256:
                 raise InvalidResult('Execution video hash differs from the registered video')
         root = BASE_DIR / 'uploads/results' / str(job_id)
         root.mkdir(parents=True, exist_ok=True)
@@ -77,7 +89,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
             shutil.copyfile(source, destination)
             # Hash copied bytes as well; reject changed source files (TOCTOU).
             with destination.open('rb') as stream:
-                if hashlib.file_digest(stream, 'sha256').hexdigest() != manifest[kind]['sha256']:
+                if stream_sha256(stream) != manifest[kind]['sha256']:
                     raise InvalidResult('CSV changed during import')
             manifest[kind]['path'] = destination.relative_to(BASE_DIR).as_posix()
             if isinstance(records[kind],DiskRows):
@@ -147,12 +159,7 @@ def store_result(db: Session, job_id: UUID, paths: dict[str, Path], roi: dict, m
         return result, True
     except Exception:
         db.rollback()
-        if created_dir is not None:
-            # Only the fresh directory allocated by this call is ever removed.
-            resolved = created_dir.resolve()
-            managed_root = (BASE_DIR / 'uploads/results').resolve()
-            if resolved.is_relative_to(managed_root) and resolved != managed_root and created_dir.name.startswith('import-'):
-                shutil.rmtree(created_dir)
+        _cleanup_created_dir(created_dir)
         raise
 
 

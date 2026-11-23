@@ -4,6 +4,7 @@ from app.models.venue import VenueRevision
 from app.models.capture_session import CaptureSessionRevision, CaptureVideoVenue
 from app.models.concentration import ConcentrationRun, OperatorEvent
 from app.models.vision import VisionResult, VisionZoneMetric, VisionBottleneckScore
+from app.models.vision_extended import VisionExtendedResult
 from app.models.camera import Camera
 from app.models.analytics import (
     AnalysisJob, BottleneckEvent, CrowdMetric, CrowdPrediction, Video,
@@ -12,7 +13,7 @@ from app.models.analytics import (
 __all__ = [
     "Base", "Camera", "Video", "AnalysisJob", "CrowdMetric",
     "CrowdPrediction", "BottleneckEvent",
-    "VisionResult", "VisionZoneMetric", "VisionBottleneckScore",
+    "VisionResult", "VisionZoneMetric", "VisionBottleneckScore", "VisionExtendedResult",
     "VideoRoiRevision",
     "VenueRevision",
     "CaptureSessionRevision",

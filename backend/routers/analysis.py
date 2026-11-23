@@ -52,6 +52,9 @@ class AnalysisJobResponse(BaseModel):
     analysis_mode: str
     analysis_profile: str = 'full'
     roi_snapshot: dict | None = Field(default=None, exclude=True)
+    progress_percent: float | None = None
+    progress_eta_seconds: float | None = None
+    progress_updated_at: datetime | None = None
 
     @computed_field
     @property

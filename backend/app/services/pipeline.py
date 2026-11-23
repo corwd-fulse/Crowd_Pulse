@@ -6,19 +6,23 @@ FastAPI 라우터나 CLI에서 이 함수 하나만 호출하면 구역 통계·
 
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from pathlib import Path
 import time
 
 import cv2
 import pandas as pd
 
 from .bottleneck import compute_bottleneck_scores
-from .individual_flow import aggregate_by_zone, compute_individual_directions
-from .optical_flow import compute_zone_motion
-from .zone_analysis import Zone, compute_zone_timeseries
-from .hybrid_flow import build_hybrid_summary
 from .bottleneck_diagnostics import describe_bottleneck_windows
+from .crowd_speed import PixelsPerMeter, compute_individual_speed, compute_zone_speed
+from .density_heatmap import compute_density_heatmap
+from .hybrid_flow import build_hybrid_summary
+from .individual_flow import DEFAULT_WINDOW_FRAMES, aggregate_by_zone, compute_counter_flow, compute_individual_directions
+from .optical_flow import compute_zone_motion
+from .queue_analysis import compute_queue_scores
+from .tracking_eval import evaluate_tracking
+from .zone_analysis import Zone, compute_dwell_times, compute_zone_timeseries
 
 
 def _run_zone_pipeline(
@@ -26,14 +30,24 @@ def _run_zone_pipeline(
     detections_csv: str,
     zones: list[Zone],
     out_dir: str,
-    *, analysis_profile: str = 'full',
+    *, analysis_profile: str = 'full', frame_stride: int = 1,
     flow_method: str = 'full_frame',
+    checkpoint_path: str | None = None,
+    progress_callback=None,
     _stack=None,
 ) -> dict[str, str]:
     """반환: {결과종류: 저장된 csv 경로}.
 
     video_path: optical_flow 계산에 쓰는 원본 영상(detections.csv 좌표만으론 안 됨).
     detections_csv: tracker.py가 만든 frame,t_ms,track_id,x1,y1,x2,y2,conf 형식 csv.
+    frame_stride: 장시간 FULL 분석에서 Optical Flow 비용을 줄이는 옵션(optical_flow.py 참고).
+    기본값 1은 예전과 100% 동일하게 매 프레임 계산한다. flow.csv의 컬럼 모양은 그대로다.
+
+    checkpoint_path: 지정하면 Optical Flow 단계(가장 비싼 연산, 중간에 예외로 끊길 가능성이
+    제일 큰 구간)가 예외로 끊겼을 때 처음부터 다시 돌리지 않고, 같은 호출 안에서 딱 한 번
+    checkpoint에서 재개를 시도한다. worker.py의 job 재시도 정책과는 무관하다 — 같은
+    프로세스·같은 호출 안에서의 재시도일 뿐이다(optical_flow.py의 _Checkpoint 설명 참고).
+    progress_callback: Optical Flow 진행 상황을 (처리한 프레임 수, 전체 프레임 수)로 받는다.
     """
     if analysis_profile not in ('fast', 'full'):
         raise ValueError('Invalid analysis profile')
@@ -58,8 +72,21 @@ def _run_zone_pipeline(
     else:
         zone_ts = compute_zone_timeseries(detections_csv, zones, fps=fps)
     flow_started = time.perf_counter()
-    motion_ts = (compute_zone_motion(video_path, zones, fps=fps, flow_method=flow_method) if analysis_profile == 'full'
-                 else pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence']))
+    if analysis_profile == 'full':
+        flow_kwargs = dict(fps=fps, frame_stride=frame_stride, flow_method=flow_method,
+                           checkpoint_path=checkpoint_path, progress_callback=progress_callback)
+        try:
+            motion_ts = compute_zone_motion(video_path, zones, **flow_kwargs)
+        except Exception as exc:
+            if checkpoint_path is None:
+                raise
+            # 가장 비싼 단계에서 끊긴 경우, 처음부터 다시 돌리지 않고 같은 호출 안에서
+            # 딱 한 번 checkpoint 지점부터 재개를 시도한다. 재개도 실패하면 그대로 올려서
+            # job 실패 처리는 기존 정책(worker.py)을 그대로 따른다 — job 자체를 재시도하지 않는다.
+            print(f'optical flow interrupted ({exc!r}); resuming once from checkpoint {checkpoint_path}')
+            motion_ts = compute_zone_motion(video_path, zones, **flow_kwargs)
+    else:
+        motion_ts = pd.DataFrame(columns=['sec','zone','angle_deg','magnitude_px','motion','low_confidence'])
     flow_seconds = time.perf_counter() - flow_started
     if not streamed:
         individual = compute_individual_directions(detections_csv)
@@ -116,7 +143,126 @@ def _run_zone_pipeline(
     return {k: str(v) for k, v in paths.items()}
 
 
-def run_zone_pipeline(video_path, detections_csv, zones, out_dir, *, analysis_profile="full", flow_method="full_frame"):
+def run_zone_pipeline(video_path, detections_csv, zones, out_dir, *, analysis_profile="full",
+                      frame_stride=1, flow_method="full_frame", checkpoint_path=None,
+                      progress_callback=None):
     from contextlib import ExitStack
     with ExitStack() as stack:
-        return _run_zone_pipeline(video_path,detections_csv,zones,out_dir,analysis_profile=analysis_profile,flow_method=flow_method,_stack=stack)
+        return _run_zone_pipeline(video_path, detections_csv, zones, out_dir,
+                                  analysis_profile=analysis_profile, frame_stride=frame_stride,
+                                  flow_method=flow_method, checkpoint_path=checkpoint_path,
+                                  progress_callback=progress_callback, _stack=stack)
+
+
+def run_extended_zone_pipeline(
+    video_path: str,
+    detections_csv: str,
+    zones: list[Zone],
+    out_dir: str,
+    *,
+    pixels_per_meter: PixelsPerMeter | None = None,
+    zone_timeseries: pd.DataFrame | None = None,
+    motion_timeseries: pd.DataFrame | None = None,
+    individual_directions: pd.DataFrame | None = None,
+    frame_stride: int = 1,
+    dmcount_model_path: str | None = None,
+    dmcount_device: str = 'cpu',
+    dmcount_gamma: float = 1.0,
+    dmcount_input_scale: float = 1.0,
+) -> dict[str, str]:
+    """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
+
+    pixels_per_meter: 카메라 보정값이 있을 때만 전달(crowd_speed.py). 없으면(기본값) 속도는
+    m/s로 환산하지 않고 그대로 생략한다 — 보정 없이 환산하면 틀린 값을 사실처럼 내보내게 된다.
+
+    dmcount_model_path: DM-Count(density_estimation.py) pretrained 체크포인트 경로가 있을
+    때만 전달(기본값 None=실행 안 함). YOLO와 완전히 독립된 별도 모델이고 CPU 추론이 느려서
+    (윈도우당 수 초~수십 초) 대부분의 job에서는 켜지 않는 opt-in 기능이다. 정확도가
+    YOLO 대비 검증되지 않았으므로(실측 실험에서 영상 조건에 따라 10~120% 가까이 벌어짐)
+    bottleneck_scores 등 어떤 계산에도 입력으로 쓰지 않고, 대시보드 참고 표시 전용이다.
+
+    zone_timeseries/motion_timeseries/individual_directions: run_zone_pipeline()이 이미 계산한
+    같은 값이 있으면 전달해서 재계산을 피한다. 특히 motion_timeseries(Optical Flow, Farneback)는
+    이 파이프라인에서 제일 비싼 연산이라 — FULL 분석에서 run_zone_pipeline()이 한 번 돌린 뒤
+    여기서 또 돌리면 그 비싼 연산을 영상 전체에 대해 두 번 하게 된다. 장시간 영상 속도 최적화
+    (frame_stride)를 넣어놓고 여기서 또 전체 재계산하면 그 의미가 없어지므로, worker.py는 반드시
+    core 파이프라인이 만든 CSV를 읽어 넘겨준다. 직접 호출(CLI/테스트)에서 생략하면 그냥 다시
+    계산한다 — 결과는 같고 느릴 뿐이다.
+
+    run_zone_pipeline()의 다섯 결과 파일(crowd_observations/flow/individual_directions/
+    individual_zone_agg/bottleneck_scores)은 worker.py가 analysis_jobs DB 저장 시 정확히
+    이 다섯 개 키만 있는지 검증한다(app/worker.py의 set(paths)!=set(SCHEMAS) 체크).
+    그 계약을 깨지 않도록 이 함수는 완전히 별도의 파일/딕셔너리로 결과를 낸다. worker.py가
+    이 결과를 vision_extended_results.py를 통해 별도 테이블(vision_extended_results)에 저장하며,
+    그 저장은 core 결과 저장이 끝난 뒤에만 일어나고 실패해도 job 상태에는 영향을 주지 않는다.
+    """
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    cap = cv2.VideoCapture(video_path)
+    try:
+        fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    finally:
+        cap.release()
+
+    # detections.csv를 한 번만 읽어 아래 네 함수 모두에 DataFrame으로 넘긴다 — 안 그러면
+    # dwell/counter_flow/density_heatmap/tracking_quality가 각자 같은 파일을 다시 파싱한다
+    # (장시간 영상일수록 그 비용이 커지는, Optical Flow 이중계산과 같은 종류의 비효율).
+    det = pd.read_csv(detections_csv)
+
+    dwell = compute_dwell_times(det, zones, fps=fps)
+    individual = individual_directions if individual_directions is not None else compute_individual_directions(det)
+    counter_flow = compute_counter_flow(individual, det, zones, fps=fps)
+
+    zone_ts = zone_timeseries if zone_timeseries is not None else compute_zone_timeseries(det, zones, fps=fps)
+    motion_ts = motion_timeseries if motion_timeseries is not None else compute_zone_motion(video_path, zones, fps=fps, frame_stride=frame_stride)
+    merged = zone_ts.merge(motion_ts[["sec", "zone", "motion"]], on=["sec", "zone"], how="left")
+    queue_scores = compute_queue_scores(merged)
+
+    heatmap = compute_density_heatmap(det, width, height, fps=fps)
+    tracking_quality = evaluate_tracking(det)
+
+    paths = {
+        "dwell_times": out / "dwell_times.csv",
+        "counter_flow": out / "counter_flow.csv",
+        "queue_scores": out / "queue_scores.csv",
+        "density_heatmap": out / "density_heatmap.csv",
+        "tracking_quality": out / "tracking_quality.json",
+    }
+    dwell.to_csv(paths["dwell_times"], index=False)
+    counter_flow.to_csv(paths["counter_flow"], index=False)
+    queue_scores.to_csv(paths["queue_scores"], index=False)
+    heatmap.to_csv(paths["density_heatmap"], index=False)
+    paths["tracking_quality"].write_text(json.dumps(tracking_quality, indent=2, ensure_ascii=False))
+
+    if pixels_per_meter is not None:
+        zone_speed = compute_zone_speed(motion_ts, fps=fps, pixels_per_meter=pixels_per_meter)
+        paths["crowd_speed_zone"] = out / "crowd_speed_zone.csv"
+        zone_speed.to_csv(paths["crowd_speed_zone"], index=False)
+
+        # 개인별 속도는 구역 하나짜리 단일 비율(float)일 때만 낸다. dict(구역별 비율)로 받았을 때
+        # 어느 비율을 적용할지는 그 순간 그 사람이 있는 구역을 다시 조회해야 해서, 여기서는
+        # 섣불리 아무 값이나 고르지 않고 생략한다.
+        if isinstance(pixels_per_meter, (int, float)):
+            individual_speed = compute_individual_speed(
+                individual, fps=fps, pixels_per_meter=pixels_per_meter, window_frames=DEFAULT_WINDOW_FRAMES
+            )
+            paths["crowd_speed_individual"] = out / "crowd_speed_individual.csv"
+            individual_speed.to_csv(paths["crowd_speed_individual"], index=False)
+
+    if dmcount_model_path is not None:
+        from .density_estimation import compute_dmcount_estimates
+
+        # 보정 설정을 model_version에 남겨 대시보드/DB에서 어떤 입력 조건의 추정치인지 구분한다.
+        model_version = "dmcount_qnrf"
+        if dmcount_gamma != 1.0 or dmcount_input_scale != 1.0:
+            model_version += f"_g{dmcount_gamma:g}_s{dmcount_input_scale:g}"
+        dmcount = compute_dmcount_estimates(video_path, zones, fps=fps, model_path=dmcount_model_path, device=dmcount_device,
+                                             model_version=model_version, gamma=dmcount_gamma,
+                                             input_scale=dmcount_input_scale,
+                                             heatmap_dir=out / "dmcount_heatmaps")
+        paths["dmcount_estimates"] = out / "dmcount_estimates.csv"
+        dmcount.to_csv(paths["dmcount_estimates"], index=False)
+
+    return {k: str(v) for k, v in paths.items()}

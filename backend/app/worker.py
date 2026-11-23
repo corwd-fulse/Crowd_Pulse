@@ -17,16 +17,46 @@ import threading
 import time
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, text
+import pandas as pd
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import sessionmaker
 
 from app.database import engine
 from app.models import AnalysisJob, Video, VisionResult
 from app.services import vision_results as storage
+from app.services import vision_extended_results as extended_storage
 from app.services.vision_csv import ExecutionMetadata, InvalidResult, SCHEMAS, validate_roi
 from app.services.inference_runtime import normalize_device, check_device, InferenceFailure, is_cuda_oom
 
 LOCK_KEY = 19201112
+
+# Optical Flow가 중간 체크포인트를 남길 수 있는 서비스 모듈들 — AI_SOURCE_CHANGED_DURING_EXECUTION
+# 검사와 resume_manifest의 code_hashes가 항상 이 동일한 목록을 공유한다(목록이 서로 다르면
+# "코드가 바뀌었는지" 판단이 재개 경로와 일반 경로에서 어긋날 수 있다).
+TRACKED_SERVICE_FILES = (
+    'tracker.py', 'pipeline.py', 'zone_analysis.py', 'optical_flow.py', 'individual_flow.py',
+    'bottleneck.py', 'hybrid_flow.py', 'bottleneck_diagnostics.py', 'zone_replay.py',
+    'roi_geometry.py', 'transition_artifact.py',
+)
+
+RESUME_MANIFEST_NAME = 'resume_manifest.json'
+# 체크포인트에서 재개를 시도했는데 또 끊기는 상황이 끝없이 반복되는 걸 막는 상한선. 재개
+# 시도 자체가 아니라 "재개가 필요했던 횟수"를 센다 — 매 restart마다 하나씩 늘어난다.
+MAX_RESUME_ATTEMPTS = 5
+
+
+@dataclass(frozen=True)
+class ResumePlan:
+    """_find_resumable_attempt()가 "재개해도 안전하다"고 판단했을 때 돌려주는 정보.
+    run_once()가 이걸 받으면 tracking을 다시 돌리지 않고 이 out_dir/detections_csv를 그대로
+    쓰고, checkpoint_path로 zone_pipeline을 호출해 Optical Flow만 이어서 계산한다."""
+    out_dir: Path
+    detections_csv: Path
+    checkpoint_path: Path
+    tracking_seconds: float
+    ai_settings: dict
+    manifest_path: Path
+    resume_count: int
 
 
 class WorkerBusy(RuntimeError):
@@ -54,8 +84,11 @@ class Claim:
 
 
 def sha256(path):
+    digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
-        return hashlib.file_digest(stream, 'sha256').hexdigest()
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def video_info(path):
@@ -74,6 +107,8 @@ def video_info(path):
 class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
+                 extended_pipeline=None, pixels_per_meter=None, enable_extended=False, frame_stride=1,
+                 dmcount_model_path=None, dmcount_gamma=1.0, dmcount_input_scale=1.0,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
                  flow_method='full_frame'):
         self.bind = bind
@@ -95,6 +130,20 @@ class Worker:
         self.allow_test = allow_test
         self.track = track
         self.pipeline = pipeline
+        self.extended_pipeline = extended_pipeline
+        self.pixels_per_meter = pixels_per_meter
+        # Opt-in: existing callers/tests that don't know about the extended pipeline must see
+        # byte-for-byte the same behavior as before it existed. Only --enable-extended-analysis
+        # (or passing enable_extended=True directly) turns this on.
+        self.enable_extended = enable_extended
+        # None(기본) = 이 job에서 DM-Count 안 돌림. 느린 CPU 추론에 정확도 미검증이라
+        # (density_estimation.py 모듈 docstring 참고) 명시적으로 체크포인트 경로를 줄 때만 켜진다.
+        self.dmcount_model_path = dmcount_model_path
+        self.dmcount_gamma = dmcount_gamma
+        self.dmcount_input_scale = dmcount_input_scale
+        if type(frame_stride) is not int or frame_stride < 1:
+            raise ValueError('frame_stride must be a positive int')
+        self.frame_stride = frame_stride
         self.inspect_video = inspect_video
         self.heartbeat_seconds = heartbeat_seconds
         # Isolated tests and explicit --once --job-id checks restrict queue scope.
@@ -166,6 +215,73 @@ class Worker:
         if not owned:
             raise WorkerInterrupted('WORKER_LOCK_LOST')
 
+    def _find_resumable_attempt(self, claim) -> tuple[ResumePlan | None, str | None]:
+        """이 claim(job)에 대해 안전하게 재개할 수 있는 이전 시도가 남아있는지 확인한다.
+
+        반환: (ResumePlan, None) — 재개 가능. (None, None) — 재개할 게 원래 없음(일반
+        job이거나 아직 tracking도 못 끝낸 상태) → 기존처럼 처리. (None, reason) — 재개를
+        시도할 흔적은 있었지만 유효하지 않음 → 호출 측이 reason을 명확한 실패 사유로 남겨야
+        한다(임의로 조용히 새로 돌리면 안 됨 — recover_interrupted()에서만 이 구분이 중요하다;
+        run_once()에서는 reason이 있어도 그냥 새로 도는 것으로 안전하게 처리한다).
+
+        video 해시/ROI/모델 등은 self.preflight(claim)을 그대로 재사용해 검증한다 — 별도
+        로직을 또 만들면 두 경로(최초 실행/재개)의 검증 기준이 갈라질 위험이 있다.
+        """
+        root = self.base / 'uploads/analysis' / str(claim.job_id)
+        manifest_path = root / RESUME_MANIFEST_NAME
+        if not manifest_path.is_file():
+            return None, None
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f'RESUME_MANIFEST_UNREADABLE ({type(exc).__name__})'
+        try:
+            source, info, video_hash = self.preflight(claim)
+        except InputFailure as exc:
+            return None, f'RESUME_PREFLIGHT_FAILED ({exc})'
+        code_hashes = {p.name: sha256(p) for p in (Path(__file__).parent / 'services').glob('*.py')
+                      if p.name in TRACKED_SERVICE_FILES}
+        current = dict(
+            video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
+            analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
+            frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            device=self.device, code_hashes=code_hashes,
+        )
+        for field, value in current.items():
+            if manifest.get(field) != value:
+                return None, f'RESUME_FINGERPRINT_MISMATCH ({field})'
+        out_dir, detections_csv = Path(manifest['out_dir']), Path(manifest['detections_csv'])
+        if not out_dir.is_dir() or not detections_csv.is_file():
+            return None, 'RESUME_ATTEMPT_FILES_MISSING'
+        resume_count = int(manifest.get('resume_count', 0))
+        if resume_count >= MAX_RESUME_ATTEMPTS:
+            return None, f'RESUME_ATTEMPT_LIMIT_EXCEEDED ({resume_count} >= {MAX_RESUME_ATTEMPTS})'
+        checkpoint_path = Path(manifest['checkpoint_path'])
+        from app.services.optical_flow import inspect_checkpoint
+        status = inspect_checkpoint(checkpoint_path, manifest['flow_checkpoint_fingerprint'])
+        if not status.valid:
+            return None, f'RESUME_CHECKPOINT_INVALID ({status.reason})'
+        return ResumePlan(out_dir, detections_csv, checkpoint_path,
+                          float(manifest.get('tracking_seconds', 0.0)), dict(manifest.get('ai_settings') or {}),
+                          manifest_path, resume_count), None
+
+    def _write_resume_manifest(self, claim, root: Path, out: Path, detections: Path,
+                               video_hash: str, code_hashes: dict, tracking_seconds: float, ai_settings: dict,
+                               checkpoint_path: Path, flow_checkpoint_fingerprint: str) -> None:
+        manifest = dict(
+            video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
+            analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
+            frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            device=self.device, code_hashes=code_hashes,
+            out_dir=str(out), detections_csv=str(detections), tracking_seconds=tracking_seconds,
+            ai_settings=ai_settings,
+            checkpoint_path=str(checkpoint_path), flow_checkpoint_fingerprint=flow_checkpoint_fingerprint,
+            resume_count=0, created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        tmp = (root / RESUME_MANIFEST_NAME).with_suffix('.json.tmp')
+        tmp.write_text(json.dumps(manifest), encoding='utf-8')
+        os.replace(tmp, root / RESUME_MANIFEST_NAME)
+
     def recover_interrupted(self):
         self.verify_lock()
         with self.sessions() as db:
@@ -178,9 +294,28 @@ class Worker:
                 if db.get(VisionResult, job.id) is not None:
                     # Do not invent actual completion timestamps for inconsistent legacy data.
                     continue
-                job.status = 'failed'
-                job.finished_at = datetime.now(timezone.utc)
-                job.error_message = 'WORKER_INTERRUPTED: previous worker stopped; submit a new job to retry'
+                video = db.get(Video, job.video_id)
+                pseudo_claim = Claim(job.id, job.worker_token, job.started_at, job.analysis_mode,
+                                     video.storage_path, job.roi_snapshot, video.status, job.analysis_profile)
+                plan, reason = self._find_resumable_attempt(pseudo_claim)
+                if plan is not None:
+                    # 재개 대상으로 전환: 같은 job_id, 같은 started_at(연속성) — 소유권만
+                    # 비워서 claim_next()가 새 worker_token으로 다시 집도록 한다. 재시도
+                    # 횟수를 여기서 먼저 올려 적어둔다 — 이번 재개도 또 끊기면 다음
+                    # recover_interrupted()가 그 값을 보고 상한을 넘었는지 판단한다.
+                    manifest = json.loads(plan.manifest_path.read_text(encoding='utf-8'))
+                    manifest['resume_count'] = plan.resume_count + 1
+                    plan.manifest_path.write_text(json.dumps(manifest), encoding='utf-8')
+                    job.status, job.worker_token = 'queued', None
+                    print(f'job {job.id}: resuming from checkpoint (attempt {plan.resume_count + 1}'
+                          f'/{MAX_RESUME_ATTEMPTS})', flush=True)
+                else:
+                    job.status = 'failed'
+                    job.finished_at = datetime.now(timezone.utc)
+                    job.error_message = (
+                        'WORKER_INTERRUPTED: previous worker stopped; submit a new job to retry'
+                        if reason is None else f'WORKER_INTERRUPTED_NO_RESUME: {reason}'
+                    )[:500]
                 recovered += 1
             db.commit()
             return recovered
@@ -200,11 +335,48 @@ class Worker:
                 raise InputFailure('QUEUED_JOB_ALREADY_HAS_RESULT')
             video = db.get(Video, job.video_id)
             token, started = uuid4(), datetime.now(timezone.utc)
-            job.status, job.worker_token, job.started_at = 'running', token, started
+            job.status, job.worker_token = 'running', token
+            # started_at은 최초 시작 시각 그대로 둔다(연속성) — 재개된 job이 아니라면
+            # None이었을 것이므로 이번이 처음이고, 그때만 새로 채운다.
+            if job.started_at is None:
+                job.started_at = started
             job.finished_at, job.error_message = None, None
-            claim = Claim(job.id, token, started, job.analysis_mode, video.storage_path, job.roi_snapshot, video.status, job.analysis_profile)
+            claim = Claim(job.id, token, job.started_at, job.analysis_mode, video.storage_path, job.roi_snapshot, video.status, job.analysis_profile)
             db.commit()
             return claim
+
+    def make_flow_progress_reporter(self, claim, root: Path):
+        """Optical Flow 단계 진행률/ETA를 파일(root/flow_progress.json)과 DB에 남긴다.
+
+        진행률 보고 자체가 실패해도(예: 그 순간 DB 연결 문제) job을 절대 실패시키지
+        않는다 — 보고는 부가 기능이고, 실제 분석 결과 저장과는 독립이다.
+        """
+        progress_path = root / 'flow_progress.json'
+        started = time.perf_counter()
+
+        def report(frame_idx: int, frame_count: int):
+            now = datetime.now(timezone.utc)
+            elapsed = time.perf_counter() - started
+            percent = round(100 * frame_idx / frame_count, 1) if frame_count else None
+            eta_seconds = None
+            if frame_count and frame_idx and elapsed > 0:
+                rate = frame_idx / elapsed
+                eta_seconds = max(frame_count - frame_idx, 0) / rate if rate else None
+            payload = dict(frame_idx=frame_idx, frame_count=frame_count, percent=percent,
+                          eta_seconds=eta_seconds, updated_at=now.isoformat())
+            try:
+                progress_path.write_text(json.dumps(payload), encoding='utf-8')
+            except OSError:
+                pass
+            try:
+                with self.sessions() as db:
+                    db.execute(update(AnalysisJob).where(AnalysisJob.id == claim.job_id).values(
+                        progress_percent=percent, progress_eta_seconds=eta_seconds,
+                        progress_updated_at=now))
+                    db.commit()
+            except Exception:
+                pass
+        return report
 
     def fail(self, claim, message):
         with self.sessions() as db:
@@ -286,44 +458,83 @@ class Worker:
         if claim is None:
             return None
         stage = 'PREFLIGHT'
+        root = None
         try:
             source,info,video_hash = self.preflight(claim)
             root = self.base/'uploads/analysis'/str(claim.job_id)
             root.mkdir(parents=True,exist_ok=True)
-            out = Path(tempfile.mkdtemp(prefix=f'{claim.token.hex}-',dir=root))
+            # resuming=True only when a previous attempt for this exact job already
+            # completed tracking and left a checkpoint whose fingerprint (video/ROI/code/
+            # settings) matches this run. See _find_resumable_attempt()'s docstring for what
+            # "matches" means and ResumePlan for what gets reused.
+            plan, _ = self._find_resumable_attempt(claim) if self.pipeline is None else (None, None)
+            resuming = plan is not None
+            out = plan.out_dir if resuming else Path(tempfile.mkdtemp(prefix=f'{claim.token.hex}-',dir=root))
             roi_path=out/'roi_snapshot.json'
-            roi_path.write_text(json.dumps(claim.roi,ensure_ascii=True,indent=2),encoding='utf-8')
-            code_hashes={p.name:sha256(p) for p in (Path(__file__).parent/'services').glob('*.py') if p.name in (
-                'tracker.py','pipeline.py','zone_analysis.py','optical_flow.py','individual_flow.py','bottleneck.py','hybrid_flow.py',
-                'bottleneck_diagnostics.py','zone_replay.py','roi_geometry.py','transition_artifact.py')}
-            with self.fail_stop_watchdog(), (out/'worker.log').open('w',encoding='utf-8',buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
+            if not resuming:
+                roi_path.write_text(json.dumps(claim.roi,ensure_ascii=True,indent=2),encoding='utf-8')
+            code_hashes={p.name:sha256(p) for p in (Path(__file__).parent/'services').glob('*.py') if p.name in TRACKED_SERVICE_FILES}
+            with self.fail_stop_watchdog(), (out/'worker.log').open('a' if resuming else 'w',encoding='utf-8',buffering=1) as log, redirect_stdout(log), redirect_stderr(log):
                 stage = 'TRACKING'
-                tracking_started = time.perf_counter()
-                summary, ai_settings = self.run_tracking(source,out)
-                tracking_seconds = time.perf_counter() - tracking_started
-                device = ai_settings['device']
-                detections=Path(summary['detections_csv']).resolve()
-                if not detections.is_relative_to(out.resolve()) or not detections.is_file():
-                    raise InputFailure('TRACKER_DETECTIONS_UNAVAILABLE')
-                # Header-only detections are allowed; downstream CSV validation
-                # decides whether that pipeline output represents a valid result.
-                if summary['frame_count'] != info['frame_count']:
-                    raise InputFailure('INCOMPLETE_VIDEO_DECODE')
+                if resuming:
+                    print(f'resuming job {claim.job_id} from Optical Flow checkpoint '
+                          f'{plan.checkpoint_path} (resume attempt {plan.resume_count}/{MAX_RESUME_ATTEMPTS}); '
+                          f'tracking already completed in a previous attempt, reusing {out}', flush=True)
+                    tracking_seconds = plan.tracking_seconds
+                    ai_settings = plan.ai_settings
+                    device = ai_settings.get('device')
+                    detections = plan.detections_csv
+                else:
+                    tracking_started = time.perf_counter()
+                    summary, ai_settings = self.run_tracking(source,out)
+                    tracking_seconds = time.perf_counter() - tracking_started
+                    device = ai_settings['device']
+                    detections=Path(summary['detections_csv']).resolve()
+                    if not detections.is_relative_to(out.resolve()) or not detections.is_file():
+                        raise InputFailure('TRACKER_DETECTIONS_UNAVAILABLE')
+                    # Header-only detections are allowed; downstream CSV validation
+                    # decides whether that pipeline output represents a valid result.
+                    if summary['frame_count'] != info['frame_count']:
+                        raise InputFailure('INCOMPLETE_VIDEO_DECODE')
                 stage = 'ZONE_PIPELINE'
                 from app.services.zone_analysis import load_zones_from_json
                 if self.pipeline is None:
                     from app.services.pipeline import run_zone_pipeline
                     pipeline = run_zone_pipeline
+                    # frame_stride is only safe to pass to the real pipeline function. A
+                    # caller-supplied self.pipeline may be a legacy four-positional-argument
+                    # adapter (see tests/test_worker.py's `worker` fixture) that predates this
+                    # option and has no **kwargs to absorb it.
+                    full_kwargs = {
+                        'frame_stride': self.frame_stride,
+                        # root (stable per-job dir), not out (fresh per-attempt tempdir): a
+                        # checkpoint must survive being read back within this same attempt,
+                        # and the per-attempt dir is only created once per run_once() call
+                        # anyway, so this is just "the one checkpoint file for this attempt".
+                        'checkpoint_path': str(root / 'flow_checkpoint.bin'),
+                        'progress_callback': self.make_flow_progress_reporter(claim, root),
+                    }
                 else:
                     pipeline = self.pipeline
-                pipeline_args = (str(source),str(detections),load_zones_from_json(str(roi_path)),str(out/'pipeline'))
+                    full_kwargs = {}
+                zones = load_zones_from_json(str(roi_path))
+                if not resuming and self.pipeline is None and claim.analysis_profile == 'full':
+                    # Write the resume manifest *before* the (potentially multi-hour) Optical
+                    # Flow call, not after — it must exist while that call is running, since
+                    # that is exactly the stage a crash/restart would interrupt.
+                    from app.services.optical_flow import compute_checkpoint_fingerprint
+                    flow_fp = compute_checkpoint_fingerprint(str(source), zones, info['fps'],
+                                                             self.frame_stride, self.flow_method)
+                    self._write_resume_manifest(claim, root, out, detections, video_hash, code_hashes,
+                                                tracking_seconds, ai_settings, root/'flow_checkpoint.bin', flow_fp)
+                pipeline_args = (str(source),str(detections),zones,str(out/'pipeline'))
                 # Preserve legacy four-argument FULL adapters.
                 if self.flow_method == 'roi_crop_128':
                     paths = pipeline(*pipeline_args, analysis_profile=claim.analysis_profile,
-                                     flow_method=self.flow_method)
+                                     flow_method=self.flow_method, **full_kwargs)
                 else:
                     paths = (pipeline(*pipeline_args, analysis_profile='fast') if claim.analysis_profile == 'fast'
-                             else pipeline(*pipeline_args))
+                             else pipeline(*pipeline_args, **full_kwargs))
                 details_path = out/'pipeline'/'analysis_details.json'
                 details = json.loads(details_path.read_text(encoding='utf-8')) if details_path.is_file() else {}
                 paths={kind:Path(path).resolve() for kind,path in paths.items()}
@@ -341,13 +552,52 @@ class Worker:
                     settings={'analysis_mode':claim.analysis_mode,'analysis_profile':claim.analysis_profile,'device':device,'ai_source_sha256':code_hashes,
                               'model_sha256':sha256(self.model_path),**ai_settings,
                               'requested_flow_method':self.flow_method,
-                              'tracking_seconds':tracking_seconds, **details},
+                              'tracking_seconds':tracking_seconds,'resumed_from_checkpoint':resuming, **details},
                 )
                 (out/'execution_metadata.json').write_text(metadata.model_dump_json(indent=2),encoding='utf-8')
             self.verify_lock()
             stage = 'RESULT_STORAGE'
             with self.sessions() as db:
                 storage.store_result(db,claim.job_id,paths,claim.roi,metadata,worker_token=claim.token)
+            # Job reached a terminal, successfully-stored state in this same call — any
+            # resume manifest for it is no longer meaningful (the checkpoint itself was
+            # already self-deleted by compute_zone_motion on its own successful return).
+            (root/RESUME_MANIFEST_NAME).unlink(missing_ok=True)
+            # Extended metrics (dwell/counter-flow/queue/heatmap/tracking-quality) are a
+            # best-effort bonus on top of the core FR-ZON result above, which has already
+            # committed. A failure here must never flip a succeeded job to failed, so it is
+            # logged to worker.log and swallowed instead of re-raised. Opt-in only
+            # (self.enable_extended) so every existing caller/test keeps its exact prior
+            # behavior unless it asks for this.
+            if claim.analysis_profile == 'full' and self.enable_extended:
+                try:
+                    if self.extended_pipeline is None:
+                        from app.services.pipeline import run_extended_zone_pipeline
+                        extended = run_extended_zone_pipeline
+                    else:
+                        extended = self.extended_pipeline
+                    # Reuse what run_zone_pipeline() already computed instead of re-running
+                    # Optical Flow (the most expensive step) a second time over the whole video.
+                    extended_paths = extended(
+                        str(source),str(detections),zones,str(out/'extended'),
+                        pixels_per_meter=self.pixels_per_meter,
+                        zone_timeseries=pd.read_csv(paths['crowd_observations']),
+                        motion_timeseries=pd.read_csv(paths['flow']),
+                        individual_directions=pd.read_csv(paths['individual_directions']),
+                        dmcount_model_path=self.dmcount_model_path,
+                        dmcount_device=self.device,
+                        dmcount_gamma=self.dmcount_gamma,
+                        dmcount_input_scale=self.dmcount_input_scale,
+                    )
+                    extended_paths = {kind:Path(path).resolve() for kind,path in extended_paths.items()}
+                    if any(not p.is_relative_to(out.resolve()) for p in extended_paths.values()):
+                        raise InputFailure('EXTENDED_PIPELINE_OUTPUT_PATH_NOT_ALLOWED')
+                    with self.sessions() as db:
+                        extended_storage.store_extended_result(db,claim.job_id,extended_paths,
+                                                                pixels_per_meter=self.pixels_per_meter)
+                except Exception as exc:
+                    with (out/'worker.log').open('a',encoding='utf-8') as log:
+                        log.write(f'EXTENDED_PIPELINE_FAILED ({type(exc).__name__}): {exc}\n')
             return {'job_id':str(claim.job_id),'status':'succeeded','analysis_profile':claim.analysis_profile,'output_dir':str(out)}
         except (Exception,KeyboardInterrupt) as exc:
             # Never put arbitrary exception strings/DB parameters in public state.
@@ -356,6 +606,12 @@ class Worker:
             else:
                 code = str(exc) if isinstance(exc,(InputFailure,WorkerInterrupted,InferenceFailure)) else f'{stage}_FAILED ({type(exc).__name__})'
             self.fail(claim,code)
+            # This run_once() call is what decided the job's fate (failed, terminal) — via a
+            # caught exception, not an abrupt process death — so any resume manifest is now
+            # stale regardless of outcome. (A true abrupt death never reaches this line at
+            # all, which is exactly the case recover_interrupted() exists to find later.)
+            if root is not None:
+                (root/RESUME_MANIFEST_NAME).unlink(missing_ok=True)
             if isinstance(exc,(KeyboardInterrupt,WorkerInterrupted)):
                 raise
             return {'job_id':str(claim.job_id),'status':'failed','error':code}
@@ -373,20 +629,49 @@ def main():
     parser.add_argument('--once',action='store_true')
     parser.add_argument('--job-id',type=UUID,help='With --once, process/recover only this job')
     parser.add_argument('--poll-seconds',type=float,default=5)
+    parser.add_argument('--pixels-per-meter',type=float,default=None,
+                        help='Camera calibration for extended crowd-speed metrics (m/s); omit to skip speed conversion')
+    parser.add_argument('--enable-extended-analysis',action='store_true',
+                        help='Also compute and store dwell/counter-flow/queue/heatmap/tracking-quality metrics (FULL profile only)')
+    parser.add_argument('--frame-stride',type=int,default=1,
+                        help='Run Optical Flow every N frames instead of every frame on long FULL videos (default 1: unchanged, every frame)')
+    parser.add_argument('--dmcount-model-path',type=Path,default=None,
+                        help='DM-Count pretrained checkpoint; omit (default) to skip this slow, accuracy-unverified reference metric entirely')
+    parser.add_argument('--dmcount-gamma',type=float,default=1.0,
+                        help='Gamma correction before DM-Count (>1 brightens dark frames; default 1.0 = off)')
+    parser.add_argument('--dmcount-input-scale',type=float,default=1.0,
+                        help='Resize factor for DM-Count input (>1 helps small, distant people; default 1.0)')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
     if args.imgsz <= 0 or args.imgsz % 32:
         parser.error('imgsz must be a positive multiple of 32')
+    if args.pixels_per_meter is not None and args.pixels_per_meter <= 0:
+        parser.error('pixels-per-meter must be positive')
+    if args.pixels_per_meter is not None and not args.enable_extended_analysis:
+        parser.error('pixels-per-meter has no effect without --enable-extended-analysis')
+    if args.frame_stride < 1:
+        parser.error('frame-stride must be a positive int')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
+    if args.dmcount_model_path is not None and not args.enable_extended_analysis:
+        parser.error('dmcount-model-path has no effect without --enable-extended-analysis')
+    if args.dmcount_model_path is not None and (not args.dmcount_model_path.is_file() or args.dmcount_model_path.stat().st_size == 0):
+        parser.error('dmcount-model-path must point to an existing local checkpoint; no automatic download')
+    for name in ('dmcount_gamma','dmcount_input_scale'):
+        value=getattr(args,name)
+        if not math.isfinite(value) or value<=0:
+            parser.error(f'{name.replace("_","-")} must be positive and finite')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
     if args.flow_method == 'roi_crop_128' and (args.device == 'cpu' or not args.allow_test_analysis or args.job_id is None):
         parser.error('roi_crop_128 requires GPU, --allow-test-analysis and --once --job-id')
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
                   scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
-                  flow_method=args.flow_method)
+                  pixels_per_meter=args.pixels_per_meter,enable_extended=args.enable_extended_analysis,
+                  frame_stride=args.frame_stride,flow_method=args.flow_method,
+                  dmcount_model_path=args.dmcount_model_path,dmcount_gamma=args.dmcount_gamma,
+                  dmcount_input_scale=args.dmcount_input_scale)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)

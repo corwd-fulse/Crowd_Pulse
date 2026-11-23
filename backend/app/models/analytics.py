@@ -99,6 +99,9 @@ class AnalysisJob(Base):
     analysis_profile: Mapped[str] = mapped_column(String(10), server_default='full')
     roi_snapshot: Mapped[dict | None] = mapped_column(JSONB)
     worker_token: Mapped[UUID | None] = mapped_column(Uuid)
+    progress_percent: Mapped[float | None] = mapped_column(Float)
+    progress_eta_seconds: Mapped[float | None] = mapped_column(Float)
+    progress_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class CrowdMetric(Base):

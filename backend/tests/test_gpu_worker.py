@@ -20,6 +20,17 @@ def test_invalid_device(value):
     with pytest.raises(ValueError):normalize_device(value)
 
 
+@pytest.mark.parametrize('value',[0,-1,1.5,'2'])
+def test_invalid_frame_stride_rejected(value):
+    with pytest.raises(ValueError):
+        module.Worker('/tmp/does-not-need-to-exist.pt','v1',frame_stride=value)
+
+
+def test_frame_stride_defaults_to_one_unchanged_behavior():
+    worker=module.Worker('/tmp/does-not-need-to-exist.pt','v1')
+    assert worker.frame_stride==1
+
+
 def test_cuda_availability_and_index_without_hardware():
     fake=SimpleNamespace(cuda=SimpleNamespace(is_available=lambda:False,device_count=lambda:0))
     with pytest.raises(InferenceFailure,match='CUDA_UNAVAILABLE'):check_device('0',fake)
