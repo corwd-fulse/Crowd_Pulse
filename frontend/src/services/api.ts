@@ -343,6 +343,52 @@ export async function getModelComparison(jobId: string, signal?: AbortSignal): P
   }
 }
 
+export type VideoForecastSource = 'yolo' | 'dmcount';
+export type VideoForecastModel = 'persistence' | 'ridge_ar' | 'lightgbm' | 'lightgbm_pre';
+
+export interface VideoForecastPoint {
+  zone: string;
+  sec: number; // 예측 대상 시각(영상 초)
+  split: 'backtest' | 'forecast';
+  actual: number | null;
+  persistence?: number | null;
+  ridge_ar?: number | null;
+  lightgbm?: number | null;
+  lightgbm_pre?: number | null;
+}
+
+export interface VideoForecastResponse {
+  analysis_job_id: string;
+  source: VideoForecastSource;
+  sources: VideoForecastSource[];
+  horizon_s: number;
+  horizons: number[];
+  zones: string[];
+  seconds: number;
+  target: string;
+  models: VideoForecastModel[];
+  backtest: {horizon_s: number; model: string; mae: number; rmse: number; skill: number; n: number}[];
+  series: VideoForecastPoint[];
+  level_segments: {zone: string; start_sec: number; end_sec: number; level_num: number; level: string}[];
+  level_seconds: Record<string, Record<string, number>>;
+  level_events: {zone: string; start_sec: number; end_sec: number; peak_sec: number | null; level: string; duration_s: number | null; reason: string}[];
+  iforest: string | null;
+  minutes: {model_version: string | null; alarms: number; backtest: Record<string, {MAE: number; MAE_persistence: number; n: number; model_share: number}>; note: string | null} | null;
+  note: string;
+}
+
+export async function getVideoForecast(jobId: string, source: VideoForecastSource, horizon: number, signal?: AbortSignal): Promise<VideoForecastResponse | null> {
+  try {
+    return (await api.get<VideoForecastResponse>(
+      `/api/analysis/jobs/${encodeURIComponent(jobId)}/results/video-forecast`, {params: {source, horizon}, signal}
+    )).data;
+  } catch (error) {
+    // 이 job에 시계열 예측을 돌리지 않았으면 404 — 에러가 아니라 "결과 없음".
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
+}
+
 export async function uploadVideo(
   file: File
 ): Promise<VideoUploadResponse> {

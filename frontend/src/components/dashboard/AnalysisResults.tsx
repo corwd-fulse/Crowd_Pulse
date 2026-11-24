@@ -6,6 +6,7 @@ import {bottleneckReason, crowdSeries, directionLabel, formatMetric, relativeSec
 import {useVisionResult} from '../../hooks/useVisionResult';
 import StartCard from './StartCard';
 import ModelComparisonPanel from './ModelComparisonPanel';
+import VideoForecastPanel from './VideoForecastPanel';
 
 const colors = ['#23cfff', '#ffc653', '#23e3bb', '#ff8db3', '#ab9bff'];
 
@@ -24,7 +25,7 @@ function ResultView({data}: {data: VisionResultBundle}) {
   const {summary} = data;
   const fast = summary.analysis_profile === 'fast';
   const scoreUnavailable = summary.components?.bottleneck === 'unanalyzed';
-  const [tab, setTab] = useState<'overview' | 'comparison'>('overview');
+  const [tab, setTab] = useState<'overview' | 'comparison' | 'forecast'>('overview');
   const [region, setRegion] = useState('');
   const [page, setPage] = useState(0);
   const metrics = data.metrics.filter((row) => !region || row.region_key === region);
@@ -62,9 +63,10 @@ function ResultView({data}: {data: VisionResultBundle}) {
       <div role="tablist" aria-label="분석 결과 탭" className="flex gap-2 border-b border-line text-sm">
         <button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`px-4 py-2 ${tab === 'overview' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>기본 결과</button>
         <button type="button" role="tab" aria-selected={tab === 'comparison'} onClick={() => setTab('comparison')} className={`px-4 py-2 ${tab === 'comparison' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>AI 모델 비교</button>
+        <button type="button" role="tab" aria-selected={tab === 'forecast'} onClick={() => setTab('forecast')} className={`px-4 py-2 ${tab === 'forecast' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>시계열 예측</button>
       </div>
 
-      {tab === 'comparison' ? <ModelComparisonPanel jobId={summary.analysis_job_id} videoId={summary.video_id} /> : <>
+      {tab === 'forecast' ? <VideoForecastPanel jobId={summary.analysis_job_id} /> : tab === 'comparison' ? <ModelComparisonPanel jobId={summary.analysis_job_id} videoId={summary.video_id} /> : <>
 
       <div className="summary-grid grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StartCard featured title="구역 최고 평균 인원" value={values.length ? `${formatMetric(values.reduce((peak, value) => Math.max(peak, value), 0))}명` : '—'} description="구역·초별 평균 중 최댓값" />

@@ -330,6 +330,21 @@ def model_comparison(job_id: UUID, db: Session = Depends(get_db)):
     }
 
 
+@router.get('/{job_id}/results/video-forecast')
+def video_forecast(job_id: UUID, source: str = 'yolo', horizon: int = 60, db: Session = Depends(get_db)):
+    """시계열 예측 탭: 10·30·60초 뒤 인원 예측(모델별 backtest)과 이상 흐름 3단계.
+    forecast/run_job_forecast.py 를 그 job에 돌린 결과 파일을 읽는다. 돌리지 않았으면 404."""
+    from app.services import video_forecast_results as forecast_service
+
+    get_result(job_id, db)
+    try:
+        return forecast_service.video_forecast(job_id, source, horizon)
+    except forecast_service.ForecastNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+
+
 @router.get('/{job_id}/results/artifacts/{kind}')
 def artifact(job_id: UUID, kind: str, db: Session = Depends(get_db)):
     result = get_result(job_id, db)
