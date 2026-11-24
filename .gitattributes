@@ -1,0 +1,3 @@
+# LightGBM text models must keep LF; CRLF breaks the model parser on Windows checkouts
+forecast/serving/artifacts/**/*.txt text eol=lf
+forecast/bottleneck/**/*.txt text eol=lf
