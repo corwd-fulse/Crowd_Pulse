@@ -110,7 +110,7 @@ class Worker:
                  extended_pipeline=None, pixels_per_meter=None, enable_extended=False, frame_stride=1,
                  dmcount_model_path=None, dmcount_gamma=1.0, dmcount_input_scale=1.0, dmcount_half=False,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
-                 flow_method='full_frame'):
+                 flow_method='full_frame', flow_workers=1):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
         self.base = Path(base_dir or storage.BASE_DIR).resolve()
@@ -121,6 +121,10 @@ class Worker:
         if flow_method == 'roi_crop_128' and (self.device == 'cpu' or not allow_test or not scope_ids):
             raise ValueError('ROI crop requires GPU, test permission and explicit job scope')
         self.flow_method = flow_method
+        if type(flow_workers) is not int or flow_workers < 1:
+            raise ValueError('flow_workers must be a positive int')
+        # Optical Flow 프로세스 수. 결과는 1과 같고 속도만 바뀐다(optical_flow.compute_zone_motion).
+        self.flow_workers = flow_workers
         if type(imgsz) is not int or imgsz <= 0 or imgsz % 32:
             raise ValueError('imgsz must be a positive multiple of 32')
         self.imgsz = imgsz
@@ -246,10 +250,12 @@ class Worker:
             video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
             analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
             frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            flow_parallel=self.flow_workers > 1,
             device=self.device, code_hashes=code_hashes,
         )
         for field, value in current.items():
-            if manifest.get(field) != value:
+            # flow_parallel이 생기기 전에 쓴 manifest는 전부 단일 코어 실행이었다.
+            if manifest.get(field, False if field == 'flow_parallel' else None) != value:
                 return None, f'RESUME_FINGERPRINT_MISMATCH ({field})'
         out_dir, detections_csv = Path(manifest['out_dir']), Path(manifest['detections_csv'])
         if not out_dir.is_dir() or not detections_csv.is_file():
@@ -273,6 +279,7 @@ class Worker:
             video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
             analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
             frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            flow_parallel=self.flow_workers > 1,
             device=self.device, code_hashes=code_hashes,
             out_dir=str(out), detections_csv=str(detections), tracking_seconds=tracking_seconds,
             ai_settings=ai_settings,
@@ -515,6 +522,8 @@ class Worker:
                         'checkpoint_path': str(root / 'flow_checkpoint.bin'),
                         'progress_callback': self.make_flow_progress_reporter(claim, root),
                     }
+                    if self.flow_workers > 1:
+                        full_kwargs['flow_workers'] = self.flow_workers
                 else:
                     pipeline = self.pipeline
                     full_kwargs = {}
@@ -525,7 +534,8 @@ class Worker:
                     # that is exactly the stage a crash/restart would interrupt.
                     from app.services.optical_flow import compute_checkpoint_fingerprint
                     flow_fp = compute_checkpoint_fingerprint(str(source), zones, info['fps'],
-                                                             self.frame_stride, self.flow_method)
+                                                             self.frame_stride, self.flow_method,
+                                                             parallel=self.flow_workers > 1)
                     self._write_resume_manifest(claim, root, out, detections, video_hash, code_hashes,
                                                 tracking_seconds, ai_settings, root/'flow_checkpoint.bin', flow_fp)
                 pipeline_args = (str(source),str(detections),zones,str(out/'pipeline'))
@@ -645,6 +655,9 @@ def main():
                         help='Run Optical Flow every N frames instead of every frame on long FULL videos (default 1: unchanged, every frame)')
     parser.add_argument('--dmcount-model-path',type=Path,default=None,
                         help='DM-Count pretrained checkpoint; omit (default) to skip this slow, accuracy-unverified reference metric entirely')
+    parser.add_argument('--flow-workers',type=int,default=1,
+                        help='Processes for Optical Flow (default 1: single core, unchanged). Results are the same; '
+                             'only speed changes. Keep it modest on shared servers.')
     parser.add_argument('--dmcount-gamma',type=float,default=1.0,
                         help='Gamma correction before DM-Count (>1 brightens dark frames; default 1.0 = off)')
     parser.add_argument('--dmcount-input-scale',type=float,default=1.0,
@@ -664,6 +677,8 @@ def main():
         parser.error('pixels-per-meter has no effect without --enable-extended-analysis')
     if args.frame_stride < 1:
         parser.error('frame-stride must be a positive int')
+    if args.flow_workers < 1:
+        parser.error('flow-workers must be a positive int')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
     if args.dmcount_model_path is not None and not args.enable_extended_analysis:
@@ -683,7 +698,7 @@ def main():
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
                   scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
                   pixels_per_meter=args.pixels_per_meter,enable_extended=args.enable_extended_analysis,
-                  frame_stride=args.frame_stride,flow_method=args.flow_method,
+                  frame_stride=args.frame_stride,flow_method=args.flow_method,flow_workers=args.flow_workers,
                   dmcount_model_path=args.dmcount_model_path,dmcount_gamma=args.dmcount_gamma,
                   dmcount_input_scale=args.dmcount_input_scale,dmcount_half=args.dmcount_fp16)
     def interrupt(signum,frame):

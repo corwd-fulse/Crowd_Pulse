@@ -36,6 +36,7 @@ def _run_zone_pipeline(
     flow_method: str = 'full_frame',
     checkpoint_path: str | None = None,
     progress_callback=None,
+    flow_workers: int = 1,
     _stack=None,
 ) -> dict[str, str]:
     """반환: {결과종류: 저장된 csv 경로}.
@@ -50,6 +51,8 @@ def _run_zone_pipeline(
     checkpoint에서 재개를 시도한다. worker.py의 job 재시도 정책과는 무관하다 — 같은
     프로세스·같은 호출 안에서의 재시도일 뿐이다(optical_flow.py의 _Checkpoint 설명 참고).
     progress_callback: Optical Flow 진행 상황을 (처리한 프레임 수, 전체 프레임 수)로 받는다.
+    flow_workers: Optical Flow를 나눠 계산할 프로세스 수(optical_flow.compute_zone_motion의
+    workers). 기본값 1은 예전과 동일한 단일 코어 계산이다.
     """
     if analysis_profile not in ('fast', 'full'):
         raise ValueError('Invalid analysis profile')
@@ -76,7 +79,8 @@ def _run_zone_pipeline(
     flow_started = time.perf_counter()
     if analysis_profile == 'full':
         flow_kwargs = dict(fps=fps, frame_stride=frame_stride, flow_method=flow_method,
-                           checkpoint_path=checkpoint_path, progress_callback=progress_callback)
+                           checkpoint_path=checkpoint_path, progress_callback=progress_callback,
+                           workers=flow_workers)
         try:
             motion_ts = compute_zone_motion(video_path, zones, **flow_kwargs)
         except Exception as exc:
@@ -132,6 +136,7 @@ def _run_zone_pipeline(
                     individual_speed_px_semantics='displacement over observation window; not px/frame or m/s',
                     farneback_parameters=dict(pyr_scale=0.5, levels=3, winsize=15, iterations=3,
                                              poly_n=5, poly_sigma=1.2, flags=0),
+                    flow_workers=flow_workers if analysis_profile == 'full' else None,
                     flow_seconds=flow_seconds, zone_pipeline_seconds=time.perf_counter() - started,
                     hybrid=hybrid)
     if Path(detections_csv).is_file():
@@ -147,13 +152,14 @@ def _run_zone_pipeline(
 
 def run_zone_pipeline(video_path, detections_csv, zones, out_dir, *, analysis_profile="full",
                       frame_stride=1, flow_method="full_frame", checkpoint_path=None,
-                      progress_callback=None):
+                      progress_callback=None, flow_workers=1):
     from contextlib import ExitStack
     with ExitStack() as stack:
         return _run_zone_pipeline(video_path, detections_csv, zones, out_dir,
                                   analysis_profile=analysis_profile, frame_stride=frame_stride,
                                   flow_method=flow_method, checkpoint_path=checkpoint_path,
-                                  progress_callback=progress_callback, _stack=stack)
+                                  progress_callback=progress_callback, flow_workers=flow_workers,
+                                  _stack=stack)
 
 
 def run_extended_zone_pipeline(
