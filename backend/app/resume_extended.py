@@ -14,7 +14,10 @@ run_extended_zone_pipeline(resumable=True)을 다시 호출하면, 끝난 단계
 
     python -m app.resume_extended <job_id> --device cuda:0 \\
         --dmcount-model-path models/dmcount_qnrf.pth --dmcount-gamma 1.5 --dmcount-input-scale 1.5 \\
-        --pixels-per-meter 50 [--compute-only | --store-only] [--work-dir DIR] [--video PATH]
+        --pixels-per-meter 50 [--dmcount-fp16] [--compute-only | --store-only] [--work-dir DIR] [--video PATH]
+
+--dmcount-fp16: 3GB급 작은 GPU용(메모리 약 절반). fp32로 하다 끊긴 계산도 fp16으로 이어갈 수
+있고, 어느 정밀도로 몇 개 윈도우를 계산했는지는 extended/extended_progress.json의 meta에 남는다.
 
 설정값(gamma/input-scale/pixels-per-meter)은 원래 worker 실행 때와 같아야 이어진다 — 다르면
 서명이 맞지 않아 처음부터 다시 계산한다(조용히 섞인 결과를 만들지 않도록).
@@ -80,6 +83,7 @@ def compute(job_id: UUID, work: Path, video: Path, args) -> dict[str, Path]:
         dmcount_gamma=args.dmcount_gamma,
         dmcount_input_scale=args.dmcount_input_scale,
         resumable=True,
+        dmcount_half=args.dmcount_fp16,
     )
     paths = {kind: Path(p).resolve() for kind, p in paths.items()}
     (work / 'extended' / 'resume_paths.json').write_text(
@@ -119,7 +123,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dmcount-model-path', type=Path, default=None)
     parser.add_argument('--dmcount-gamma', type=float, default=1.0)
     parser.add_argument('--dmcount-input-scale', type=float, default=1.0)
-    mode = parser.add_mutually_exclusive_group()
+    parser.add_argument('--dmcount-fp16', action='store_true',
+                        help='fp16 DM-Count (about half the GPU memory, CUDA only). May continue an fp32 '
+                             'checkpoint; how many windows ran in each precision is kept in extended_progress.json')
+    mode =parser.add_mutually_exclusive_group()
     mode.add_argument('--compute-only', action='store_true', help='compute without touching the DB (needs --video)')
     mode.add_argument('--store-only', action='store_true', help='store an already computed result')
     args = parser.parse_args(argv)
@@ -132,6 +139,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.dmcount_model_path is not None and (not args.dmcount_model_path.is_file()
                                                 or args.dmcount_model_path.stat().st_size == 0):
         parser.error('dmcount-model-path must point to an existing local checkpoint; no automatic download')
+    if args.dmcount_fp16 and (args.dmcount_model_path is None or args.device == 'cpu'):
+        parser.error('dmcount-fp16 requires --dmcount-model-path and a CUDA --device')
     if args.compute_only and args.video is None:
         parser.error('--compute-only needs --video (it does not read the DB)')
 

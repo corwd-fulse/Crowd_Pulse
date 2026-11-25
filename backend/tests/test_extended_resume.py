@@ -191,3 +191,37 @@ def test_extended_pipeline_default_writes_no_progress_files(tmp_path):
     _write_detections(tmp_path / "det.csv")
     run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(tmp_path / "out"))
     assert not (tmp_path / "out" / EXTENDED_PROGRESS_NAME).exists()
+
+
+def test_fp32_checkpoint_can_continue_in_fp16_and_records_precisions(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    ckpt = tmp_path / "ckpt.json"
+    with pytest.raises(Crash):
+        _run(video, CountingDensity(crash_after=7), checkpoint_path=ckpt)
+
+    fn = CountingDensity()
+    result = _run(video, fn, checkpoint_path=ckpt, half=True)
+    assert fn.calls == 3 * 4  # precision is not part of the signature: it continues
+    assert result.attrs["windows_by_precision"] == {"fp32": 2, "fp16": 4}
+
+
+def test_fp16_without_cuda_is_rejected(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    weights = tmp_path / "w.pth"
+    weights.write_bytes(b"x")
+    with pytest.raises(ValueError, match="CUDA"):
+        compute_dmcount_estimates(str(video), [ZONE], fps=10, model_path=weights, device="cpu", half=True)
+
+
+def test_extended_pipeline_records_dmcount_precision(tmp_path, monkeypatch):
+    _write_video(tmp_path / "v.mp4")
+    _write_detections(tmp_path / "det.csv")
+    weights = tmp_path / "w.pth"
+    weights.write_bytes(b"x")
+    _patch_dmcount(monkeypatch, CountingDensity())
+    run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(tmp_path / "out"),
+                               dmcount_model_path=str(weights), resumable=True, dmcount_half=True)
+    progress = json.loads((tmp_path / "out" / EXTENDED_PROGRESS_NAME).read_text())
+    assert progress["meta"]["dmcount:dmcount_qnrf"] == {"windows_by_precision": {"fp16": 6}}

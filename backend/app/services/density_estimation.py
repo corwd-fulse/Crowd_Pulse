@@ -48,8 +48,8 @@ DensityFn = Callable[[np.ndarray], tuple[np.ndarray, float]]  # BGR 프레임 ->
 _model_cache: dict[str, object] = {}
 
 
-def _load_model(model_path: Path, device: str):
-    key = f"{model_path}:{device}"
+def _load_model(model_path: Path, device: str, half: bool = False):
+    key = f"{model_path}:{device}:{'fp16' if half else 'fp32'}"
     if key not in _model_cache:
         if not model_path.is_file():
             raise InferenceFailure('LOCAL_MODEL_REQUIRED_NO_AUTO_DOWNLOAD')
@@ -60,6 +60,8 @@ def _load_model(model_path: Path, device: str):
         model = vgg19()
         model.load_state_dict(torch.load(model_path, map_location=device))
         model.to(device)
+        if half:
+            model.half()
         model.eval()
         _model_cache[key] = model
     return _model_cache[key]
@@ -73,10 +75,10 @@ _TO_INPUT = transforms.Compose([
 ])
 
 
-def _estimator_from_model(model_path: Path, device: str, input_scale: float = 1.0) -> DensityFn:
+def _estimator_from_model(model_path: Path, device: str, input_scale: float = 1.0, half: bool = False) -> DensityFn:
     import torch
 
-    model = _load_model(model_path, device)
+    model = _load_model(model_path, device, half)
 
     def estimate(frame_bgr: np.ndarray) -> tuple[np.ndarray, float]:
         # input_scale>1: 멀리 작게 찍힌 사람을 QNRF 학습 때 크기에 가깝게 키운다. density map
@@ -85,11 +87,15 @@ def _estimator_from_model(model_path: Path, device: str, input_scale: float = 1.
             frame_bgr = cv2.resize(frame_bgr, None, fx=input_scale, fy=input_scale, interpolation=cv2.INTER_CUBIC)
         img = Image.fromarray(cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB))
         inp = _TO_INPUT(img).unsqueeze(0).to(device)
+        if half:
+            inp = inp.half()
         start = time.perf_counter()
         with torch.no_grad():
             outputs, _ = model(inp)
         inference_ms = (time.perf_counter() - start) * 1000
-        return outputs[0, 0].cpu().numpy(), inference_ms
+        # fp16이어도 density map은 float32로 돌려준다 — ROI 합산(인원수)에서 fp16 누적 오차가
+        # 쌓이지 않도록 합산은 항상 float32로 한다.
+        return outputs[0, 0].float().cpu().numpy(), inference_ms
 
     return estimate
 
@@ -160,7 +166,7 @@ class _DmcountCheckpoint:
     def __init__(self, path: Path):
         self.path = Path(path)
 
-    def load(self, fingerprint: str, heatmap_dir: Path | None) -> tuple[float, list[dict]] | None:
+    def load(self, fingerprint: str, heatmap_dir: Path | None) -> tuple[float, list[dict], dict[str, int]] | None:
         if not self.path.is_file():
             return None
         try:
@@ -178,14 +184,16 @@ class _DmcountCheckpoint:
             if name and (heatmap_dir is None or not (heatmap_dir / name).is_file()):
                 print(f'dmcount checkpoint heatmap {name} missing; starting DM-Count from the beginning', flush=True)
                 return None
-        return float(state['next_window_start']), rows
+        return float(state['next_window_start']), rows, dict(state.get('windows_by_precision', {}))
 
-    def save(self, fingerprint: str, next_window_start: float, rows: list[dict]) -> None:
+    def save(self, fingerprint: str, next_window_start: float, rows: list[dict],
+             windows_by_precision: dict[str, int]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + '.tmp')
         tmp.write_text(json.dumps({
             'version': DMCOUNT_CHECKPOINT_VERSION, 'fingerprint': fingerprint,
             'next_window_start': next_window_start, 'rows': rows,
+            'windows_by_precision': windows_by_precision,
         }), encoding='utf-8')
         os.replace(tmp, self.path)
 
@@ -208,6 +216,7 @@ def compute_dmcount_estimates(
     heatmap_dir: Path | str | None = None,
     density_fn: DensityFn | None = None,
     checkpoint_path: Path | str | None = None,
+    half: bool = False,
 ) -> pd.DataFrame:
     """반환: columns = [window_start, zone, estimated_count, inference_ms, model_version,
     density_map_path].
@@ -235,6 +244,12 @@ def compute_dmcount_estimates(
     서명(_dmcount_fingerprint)의 체크포인트가 이미 있으면 그 다음 윈도우부터 이어서 계산한다.
     서명에 영상 경로가 없으므로 작업 디렉터리를 다른 컴퓨터로 옮겨서(다른 GPU/device로)
     이어가도 된다. 정상 종료 시 체크포인트 파일은 삭제한다. 생략하면 기존 동작과 동일.
+    half: True면 모델 가중치·입력을 fp16으로 바꿔 GPU 메모리를 약 절반으로 줄인다(3GB급 GPU에서
+    input_scale 1.5 같은 큰 입력을 돌리기 위한 opt-in). CUDA에서만 허용한다. density map
+    합산은 float32로 하므로 인원수 오차는 작을 것으로 예상하지만(VGG 계열 추론) 실측 전이다.
+    정밀도는 서명에 넣지 않는다 — fp32로 하다 끊긴 계산을 fp16(작은 GPU)으로 이어갈 수 있게
+    하려는 것이고, 대신 어느 정밀도로 몇 개 윈도우를 계산했는지 반환 DataFrame의
+    attrs['windows_by_precision']에 남긴다(예: {'fp32': 120, 'fp16': 234}).
     """
     if window_s <= 0:
         raise ValueError("window_s must be positive")
@@ -245,7 +260,10 @@ def compute_dmcount_estimates(
     if input_scale <= 0:
         raise ValueError("input_scale must be positive")
     device = check_device(device)
-    estimate = density_fn or _estimator_from_model(Path(model_path), device, input_scale)
+    if half and device == 'cpu' and density_fn is None:
+        raise ValueError("half (fp16) DM-Count inference requires a CUDA device")
+    precision = 'fp16' if half else 'fp32'
+    estimate = density_fn or _estimator_from_model(Path(model_path), device, input_scale, half)
     if heatmap_dir is not None:
         heatmap_dir = Path(heatmap_dir)
         heatmap_dir.mkdir(parents=True, exist_ok=True)
@@ -263,6 +281,7 @@ def compute_dmcount_estimates(
         duration_s = total_frames / fps
         rows: list[dict] = []
         window_start = 0.0
+        windows_by_precision: dict[str, int] = {}
         checkpoint = fingerprint = None
         if checkpoint_path is not None:
             checkpoint = _DmcountCheckpoint(Path(checkpoint_path))
@@ -275,9 +294,10 @@ def compute_dmcount_estimates(
             )
             restored = checkpoint.load(fingerprint, heatmap_dir)
             if restored is not None:
-                window_start, rows = restored
+                window_start, rows, windows_by_precision = restored
                 print(f'dmcount: resuming from checkpoint at {window_start:g}s / {duration_s:.0f}s '
-                      f'({len(rows)} rows restored)', flush=True)
+                      f'({len(rows)} rows restored, so far {windows_by_precision}; continuing in {precision})',
+                      flush=True)
         while window_start < duration_s:
             # 윈도우 경계에 걸치지 않도록 내부 균등 간격 지점을 쓴다(0초/10초 자체가 아니라
             # 그 사이 (1/(n+1), 2/(n+1), ...) 지점). 영상 끝에 걸린 마지막 윈도우는
@@ -326,13 +346,15 @@ def compute_dmcount_estimates(
                     "density_map_path": heatmap_name,
                 })
             window_start += window_s
+            windows_by_precision[precision] = windows_by_precision.get(precision, 0) + 1
             if checkpoint is not None:
-                checkpoint.save(fingerprint, window_start, rows)
+                checkpoint.save(fingerprint, window_start, rows, windows_by_precision)
         if heatmap_dir is not None:
             for row in rows:
                 if row["density_map_path"]:
                     row["density_map_path"] = str(heatmap_dir / row["density_map_path"])
         result = pd.DataFrame(rows, columns=columns)
+        result.attrs["windows_by_precision"] = windows_by_precision
         if checkpoint is not None:
             checkpoint.clear()
         return result

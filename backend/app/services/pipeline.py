@@ -172,6 +172,7 @@ def run_extended_zone_pipeline(
     dmcount_gamma: float = 1.0,
     dmcount_input_scale: float = 1.0,
     resumable: bool = False,
+    dmcount_half: bool = False,
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
 
@@ -205,6 +206,9 @@ def run_extended_zone_pipeline(
     체크포인트(DMCOUNT_CHECKPOINT_NAME)를 남긴다. (1)이 이미 끝난 out_dir이면 detections_csv가
     없어도 된다 — 그래서 out_dir만 다른 컴퓨터로 복사해 DM-Count만 다른 GPU로 이어 계산할 수
     있다. 기본값 False는 기존 동작과 동일(진행 기록 파일을 만들지 않음).
+
+    dmcount_half: DM-Count를 fp16으로 추론(작은 GPU용, CUDA 전용 — density_estimation 참고).
+    어느 정밀도로 몇 개 윈도우를 계산했는지는 진행 기록의 meta에 남긴다.
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -249,11 +253,14 @@ def run_extended_zone_pipeline(
                                                  model_version=model_version, gamma=dmcount_gamma,
                                                  input_scale=dmcount_input_scale,
                                                  heatmap_dir=out / "dmcount_heatmaps",
-                                                 checkpoint_path=out / DMCOUNT_CHECKPOINT_NAME if resumable else None)
+                                                 checkpoint_path=out / DMCOUNT_CHECKPOINT_NAME if resumable else None,
+                                                 half=dmcount_half)
             dmcount_paths = {"dmcount_estimates": out / "dmcount_estimates.csv"}
             dmcount.to_csv(dmcount_paths["dmcount_estimates"], index=False)
+            precisions = dmcount.attrs.get("windows_by_precision", {})
+            print(f'extended: DM-Count windows by precision {precisions}', flush=True)
             if progress is not None:
-                progress.mark(stage, dmcount_paths)
+                progress.mark(stage, dmcount_paths, meta={'windows_by_precision': precisions})
             paths.update(dmcount_paths)
     return {k: str(v) for k, v in paths.items()}
 
@@ -314,12 +321,14 @@ class _ExtendedProgress:
             paths[kind] = path
         return paths
 
-    def mark(self, stage: str, paths: dict[str, Path]) -> None:
+    def mark(self, stage: str, paths: dict[str, Path], meta: dict | None = None) -> None:
         self.state['stages'][stage] = {
             kind: {'file': Path(path).resolve().relative_to(self.out.resolve()).as_posix(),
                    'sha256': _sha256_file(Path(path))}
             for kind, path in paths.items()
         }
+        if meta is not None:
+            self.state.setdefault('meta', {})[stage] = meta
         tmp = self.path.with_name(self.path.name + '.tmp')
         tmp.write_text(json.dumps(self.state, indent=2), encoding='utf-8')
         os.replace(tmp, self.path)
