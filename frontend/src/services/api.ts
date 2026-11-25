@@ -319,6 +319,9 @@ export interface ModelComparisonItem {
   window_start: number; // seconds, 10초 윈도우 (backend density_estimation.WINDOW_S와 동일)
   yolo_count: number | null; // 같은 윈도우에 YOLO 관측이 없으면 null(비교 시점 불일치)
   dmcount_estimated_count: number;
+  // YOLO 박스 밖에 남은 DM-Count density 합 / YOLO + 그 값(보완 추정). 박스 없이 돌린 예전 결과는 null.
+  dmcount_residual_count: number | null;
+  fused_count: number | null;
   dmcount_inference_ms: number;
   dmcount_model_version: string;
   density_map_path: string | null; // 상대 API 경로, 없으면 히트맵 미저장

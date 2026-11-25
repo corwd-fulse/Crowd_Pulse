@@ -21,7 +21,9 @@ export default function ModelComparisonPanel({jobId, videoId}: {jobId: string; v
   return <ComparisonView data={state.data} videoId={videoId} />;
 }
 
-const colors = {yolo: '#23cfff', dmcount: '#ffc653'};
+const colors = {yolo: '#23cfff', dmcount: '#ffc653', fused: '#c084fc'};
+
+const mean = (values: number[]) => (values.length ? values.reduce((sum, v) => sum + v, 0) / values.length : null);
 
 function ComparisonView({data, videoId}: {data: import('../../services/api').ModelComparisonResponse; videoId: string}) {
   const zones = useMemo(() => [...new Set(data.items.map((item) => item.zone))].sort(), [data.items]);
@@ -39,6 +41,16 @@ function ComparisonView({data, videoId}: {data: import('../../services/api').Mod
     setSelected(rows[0]?.window_start ?? null);
   }
   const selectedRow = rows.find((row) => row.window_start === selected) ?? null;
+  // YOLO 박스 밖 잔여가 저장된 결과에서만 "YOLO + DM-Count" 선·열을 보여준다(예전 결과는 null).
+  const hasFused = rows.some((row) => row.fused_count !== null);
+  const summary = useMemo(() => {
+    const paired = rows.filter((row) => row.yolo_count !== null && row.fused_count !== null);
+    return {
+      yolo: mean(paired.map((row) => row.yolo_count as number)),
+      fused: mean(paired.map((row) => row.fused_count as number)),
+      residual: mean(paired.map((row) => row.dmcount_residual_count as number)),
+    };
+  }, [rows]);
 
   const video = useRef<HTMLVideoElement>(null);
   const seekTo = (windowStart: number) => {
@@ -80,8 +92,17 @@ function ComparisonView({data, videoId}: {data: import('../../services/api').Mod
           <Legend />
           {selected !== null && <ReferenceLine x={selected} stroke="var(--color-ink-soft)" strokeDasharray="2 3" />}
           <Line dataKey="yolo_count" name="YOLO" type="linear" stroke={colors.yolo} strokeWidth={2} dot activeDot={{r: 5, onClick: (_, payload) => seekTo((payload as unknown as {payload: {window_start: number}}).payload.window_start)}} connectNulls={false} isAnimationActive={false} />
+          {hasFused && <Line dataKey="fused_count" name="YOLO + DM-Count (보완)" type="linear" stroke={colors.fused} strokeWidth={2} dot={false} activeDot={{r: 5, onClick: (_, payload) => seekTo((payload as unknown as {payload: {window_start: number}}).payload.window_start)}} connectNulls={false} isAnimationActive={false} />}
           <Line dataKey="dmcount_estimated_count" name="DM-Count (참고)" type="linear" stroke={colors.dmcount} strokeWidth={2} strokeDasharray="5 4" dot activeDot={{r: 5, onClick: (_, payload) => seekTo((payload as unknown as {payload: {window_start: number}}).payload.window_start)}} isAnimationActive={false} />
         </LineChart></ResponsiveContainer></div>}
+        {hasFused && summary.yolo !== null && summary.fused !== null && summary.residual !== null && <div className="mt-4 space-y-2 text-xs text-ink-soft">
+          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="rounded-sm border border-line px-3 py-2"><dt className="text-muted">YOLO만 (평균)</dt><dd className="mt-1 text-base font-bold text-ink">{summary.yolo.toFixed(2)}명</dd></div>
+            <div className="rounded-sm border border-line px-3 py-2"><dt className="text-muted">YOLO + DM-Count (평균)</dt><dd className="mt-1 text-base font-bold text-ink">{summary.fused.toFixed(2)}명</dd></div>
+            <div className="rounded-sm border border-line px-3 py-2"><dt className="text-muted">DM-Count가 더한 인원 (평균)</dt><dd className="mt-1 text-base font-bold text-ink">+{summary.residual.toFixed(2)}명{summary.yolo > 0 ? ` (+${((summary.residual / summary.yolo) * 100).toFixed(0)}%)` : ''}</dd></div>
+          </dl>
+          <p className="text-muted">YOLO + DM-Count = YOLO 인원 + YOLO 사람 박스(10% 여유) 밖에 남은 DM-Count 밀도 합. YOLO가 놓친 먼 곳·겹친 사람을 채우려는 보완 추정이지만, 박스 밖에서 DM-Count가 사람으로 잘못 본 무늬(꽃·간판·조명·젖은 바닥의 빛 반사 등)도 함께 더해집니다.</p>
+        </div>}
       </div>
 
       <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
@@ -97,11 +118,12 @@ function ComparisonView({data, videoId}: {data: import('../../services/api').Mod
 
       <div className="overflow-hidden rounded-lg border border-line bg-surface">
         <h3 className="px-5 py-4 text-sm font-bold text-ink">윈도우별 비교표</h3>
-        <div className="max-h-80 overflow-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken text-muted"><tr>{['시점', 'YOLO 평균 인원', 'DM-Count 추정', '차이', '추론 시간'].map((title) => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead><tbody>{rows.map((row) => {
+        <div className="max-h-80 overflow-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken text-muted"><tr>{['시점', 'YOLO 평균 인원', ...(hasFused ? ['YOLO + DM-Count'] : []), 'DM-Count 추정', '차이', '추론 시간'].map((title) => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead><tbody>{rows.map((row) => {
           const diff = row.yolo_count === null ? null : row.dmcount_estimated_count - row.yolo_count;
           return <tr key={row.window_start} onClick={() => seekTo(row.window_start)} aria-current={row.window_start === selected} className={`cursor-pointer border-t border-line ${row.window_start === selected ? 'bg-sunken' : ''}`}>
             <td className="whitespace-nowrap px-4 py-3">{row.window_start}초</td>
             <td className="px-4 py-3">{row.yolo_count === null ? '동일 시점 YOLO 데이터 없음' : `${row.yolo_count.toLocaleString('ko-KR')}명`}</td>
+            {hasFused && <td className="px-4 py-3">{row.fused_count === null ? '—' : `${row.fused_count.toLocaleString('ko-KR')}명 (+${(row.dmcount_residual_count ?? 0).toLocaleString('ko-KR')})`}</td>}
             <td className="px-4 py-3">{row.dmcount_estimated_count.toLocaleString('ko-KR')}명</td>
             <td className="px-4 py-3">{diff === null ? '—' : `${diff > 0 ? '+' : ''}${diff.toFixed(2)}명`}</td>
             <td className="whitespace-nowrap px-4 py-3">{(row.dmcount_inference_ms / 1000).toFixed(1)}초</td>

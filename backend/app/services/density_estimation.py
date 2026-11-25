@@ -137,6 +137,40 @@ def _zone_mask_at(zone: Zone, frame_shape: tuple[int, int], map_shape: tuple[int
     return mask
 
 
+# YOLO 박스를 사방으로 이만큼(박스 폭/높이 비율) 넓혀서, 그 안의 density는 YOLO가 이미 센
+# 사람으로 본다 — 머리가 박스 위끝에 걸쳐 밀도가 박스 밖으로 번지는 것을 흡수하는 여유.
+RESIDUAL_BOX_PAD = 0.10
+
+
+def _detections_lookup(detections_csv: Path):
+    """tracker.py의 video_detections.csv를 프레임 번호로 정렬해 두고, 프레임 하나의 박스
+    (N,4: x1,y1,x2,y2)를 이진 탐색으로 꺼내는 함수를 돌려준다(긴 영상도 dict 없이 빠르게)."""
+    det = pd.read_csv(detections_csv, usecols=["frame", "x1", "y1", "x2", "y2"])
+    det = det.sort_values("frame", kind="stable")
+    frames = det["frame"].to_numpy()
+    xyxy = det[["x1", "y1", "x2", "y2"]].to_numpy(dtype=np.float32)
+
+    def boxes_at(frame_idx: int) -> np.ndarray:
+        lo, hi = np.searchsorted(frames, frame_idx, "left"), np.searchsorted(frames, frame_idx, "right")
+        return xyxy[lo:hi]
+
+    return boxes_at
+
+
+def _uncovered_mask(boxes: np.ndarray, frame_shape: tuple[int, int], map_shape: tuple[int, int]) -> np.ndarray:
+    """density map 격자에서 어느 YOLO 박스(RESIDUAL_BOX_PAD만큼 넓힘)에도 덮이지 않은 칸 = True."""
+    frame_h, frame_w = frame_shape
+    map_h, map_w = map_shape
+    sx, sy = map_w / frame_w, map_h / frame_h
+    covered = np.zeros(map_shape, dtype=bool)
+    for x1, y1, x2, y2 in boxes:
+        px, py = (x2 - x1) * RESIDUAL_BOX_PAD, (y2 - y1) * RESIDUAL_BOX_PAD
+        r0, r1 = max(0, int((y1 - py) * sy)), min(map_h, int(np.ceil((y2 + py) * sy)) + 1)
+        c0, c1 = max(0, int((x1 - px) * sx)), min(map_w, int(np.ceil((x2 + px) * sx)) + 1)
+        covered[r0:r1, c0:c1] = True
+    return ~covered
+
+
 DMCOUNT_CHECKPOINT_VERSION = 1
 
 
@@ -166,7 +200,8 @@ class _DmcountCheckpoint:
     def __init__(self, path: Path):
         self.path = Path(path)
 
-    def load(self, fingerprint: str, heatmap_dir: Path | None) -> tuple[float, list[dict], dict[str, int]] | None:
+    def load(self, fingerprint: str, heatmap_dir: Path | None,
+             has_residual: bool = False) -> tuple[float, list[dict], dict[str, int]] | None:
         if not self.path.is_file():
             return None
         try:
@@ -174,6 +209,12 @@ class _DmcountCheckpoint:
         except (OSError, ValueError) as exc:
             print(f'dmcount checkpoint unreadable ({exc!r}); starting DM-Count from the beginning', flush=True)
             return None
+        if state.get('has_residual') and not has_residual:
+            # 조용히 처음부터 다시 돌리면 GPU 시간을 통째로 버리므로 멈추고 알려준다.
+            raise ValueError(
+                f'{self.path} was computed with the YOLO residual (tracker detections CSV); to continue it, '
+                'provide the same tracker/video_detections.csv (e.g. copy it next to extended/ on this machine), '
+                'or delete the checkpoint to restart DM-Count without the residual')
         if state.get('version') != DMCOUNT_CHECKPOINT_VERSION or state.get('fingerprint') != fingerprint:
             print('dmcount checkpoint does not match this video/zones/settings/weights; '
                   'starting DM-Count from the beginning', flush=True)
@@ -187,11 +228,11 @@ class _DmcountCheckpoint:
         return float(state['next_window_start']), rows, dict(state.get('windows_by_precision', {}))
 
     def save(self, fingerprint: str, next_window_start: float, rows: list[dict],
-             windows_by_precision: dict[str, int]) -> None:
+             windows_by_precision: dict[str, int], has_residual: bool = False) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_name(self.path.name + '.tmp')
         tmp.write_text(json.dumps({
-            'version': DMCOUNT_CHECKPOINT_VERSION, 'fingerprint': fingerprint,
+            'version': DMCOUNT_CHECKPOINT_VERSION, 'fingerprint': fingerprint, 'has_residual': has_residual,
             'next_window_start': next_window_start, 'rows': rows,
             'windows_by_precision': windows_by_precision,
         }), encoding='utf-8')
@@ -217,9 +258,17 @@ def compute_dmcount_estimates(
     density_fn: DensityFn | None = None,
     checkpoint_path: Path | str | None = None,
     half: bool = False,
+    detections_csv: Path | str | None = None,
 ) -> pd.DataFrame:
     """반환: columns = [window_start, zone, estimated_count, inference_ms, model_version,
-    density_map_path].
+    density_map_path] (+ yolo_residual_count, detections_csv를 준 경우).
+
+    detections_csv: YOLO+ByteTrack 결과(tracker.py의 video_detections.csv, frame은 영상 프레임
+    번호)를 주면, 같은 샘플 프레임의 사람 박스(사방 RESIDUAL_BOX_PAD만큼 넓힘) 바깥에 남은
+    density 합을 zone별로 구해 yolo_residual_count에 넣는다 — "YOLO가 못 잡은 곳에서 DM-Count가
+    본 인원". YOLO 인원 + 이 값이 YOLO+DM-Count 보완 추정이다. 모델을 더 돌리지 않고 이미 구한
+    density map을 나눠 더할 뿐이라 비용은 프레임당 수 ms다. 주의: 꽃·간판 같은 무늬를 DM-Count가
+    사람으로 보는 오탐도 박스 밖에 있으면 그대로 더해진다(59분 낮 영상 실측, 참고 지표로만 쓴다).
 
     heatmap_dir: 지정하면(기본값 None=저장 안 함) 윈도우당 1장(마지막으로 추론한 샘플의
     전체 프레임 density map)을 컬러 히트맵 PNG로 그 디렉터리에 저장하고, 그 윈도우의 모든
@@ -278,8 +327,11 @@ def compute_dmcount_estimates(
         frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         columns = ["window_start", "zone", "estimated_count", "inference_ms", "model_version", "density_map_path"]
+        if detections_csv is not None:
+            columns.append("yolo_residual_count")
         if total_frames <= 0 or not zones:
             return pd.DataFrame(columns=columns)
+        boxes_at = _detections_lookup(Path(detections_csv)) if detections_csv is not None else None
 
         duration_s = total_frames / fps
         rows: list[dict] = []
@@ -294,8 +346,11 @@ def compute_dmcount_estimates(
                 model_version=model_version, window_s=window_s, samples_per_window=samples_per_window,
                 gamma=gamma, input_scale=input_scale, heatmaps=heatmap_dir is not None,
                 weights='injected' if density_fn is not None else _file_sha256(Path(model_path)),
+                # 잔여(박스 밖) 계산 여부가 다르면 행 구성이 달라지므로 서명에 넣는다. 없을 때는
+                # 키 자체를 넣지 않아 기존 체크포인트와 서명이 그대로 맞는다.
+                **({'detections': _file_sha256(Path(detections_csv))} if detections_csv is not None else {}),
             )
-            restored = checkpoint.load(fingerprint, heatmap_dir)
+            restored = checkpoint.load(fingerprint, heatmap_dir, has_residual=boxes_at is not None)
             if restored is not None:
                 window_start, rows, windows_by_precision = restored
                 print(f'dmcount: resuming from checkpoint at {window_start:g}s / {duration_s:.0f}s '
@@ -315,6 +370,7 @@ def compute_dmcount_estimates(
             frame_indices = sorted({min(int((window_start + off) * fps), total_frames - 1) for off in offsets})
 
             counts_per_zone: dict[str, list[float]] = {z.name: [] for z in zones}
+            residual_per_zone: dict[str, list[float]] = {z.name: [] for z in zones}
             total_inference_ms = 0.0
             last_density_map = None
             for frame_idx in frame_indices:
@@ -326,9 +382,14 @@ def compute_dmcount_estimates(
                 density_map, inference_ms = estimate(frame)
                 total_inference_ms += inference_ms
                 last_density_map = density_map
+                uncovered = None
+                if boxes_at is not None:
+                    uncovered = _uncovered_mask(boxes_at(frame_idx), (frame_h, frame_w), density_map.shape)
                 for zone in zones:
-                    mask = _zone_mask_at(zone, (frame_h, frame_w), density_map.shape)
-                    counts_per_zone[zone.name].append(float(density_map[mask == 1].sum()))
+                    mask = _zone_mask_at(zone, (frame_h, frame_w), density_map.shape) == 1
+                    counts_per_zone[zone.name].append(float(density_map[mask].sum()))
+                    if uncovered is not None:
+                        residual_per_zone[zone.name].append(float(density_map[mask & uncovered].sum()))
 
             # 행에는 히트맵 파일 이름만 넣고, 절대경로는 반환 직전에 붙인다(체크포인트 이식성).
             heatmap_name = None
@@ -340,18 +401,23 @@ def compute_dmcount_estimates(
                 samples = counts_per_zone[zone.name]
                 if not samples:
                     continue
-                rows.append({
+                row = {
                     "window_start": int(window_start),
                     "zone": zone.name,
                     "estimated_count": round(sum(samples) / len(samples), 2),
                     "inference_ms": round(total_inference_ms, 1),
                     "model_version": model_version,
                     "density_map_path": heatmap_name,
-                })
+                }
+                if boxes_at is not None:
+                    residual = residual_per_zone[zone.name]
+                    row["yolo_residual_count"] = round(sum(residual) / len(residual), 2)
+                rows.append(row)
             window_start += window_s
             windows_by_precision[precision] = windows_by_precision.get(precision, 0) + 1
             if checkpoint is not None:
-                checkpoint.save(fingerprint, window_start, rows, windows_by_precision)
+                checkpoint.save(fingerprint, window_start, rows, windows_by_precision,
+                                has_residual=boxes_at is not None)
         if heatmap_dir is not None:
             for row in rows:
                 if row["density_map_path"]:

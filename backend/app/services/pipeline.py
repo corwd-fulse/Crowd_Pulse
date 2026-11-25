@@ -243,7 +243,12 @@ def run_extended_zone_pipeline(
         model_version = "dmcount_qnrf"
         if dmcount_gamma != 1.0 or dmcount_input_scale != 1.0:
             model_version += f"_g{dmcount_gamma:g}_s{dmcount_input_scale:g}"
-        stage = f'dmcount:{model_version}'
+        # 추적 결과(박스)가 있으면 YOLO 박스 밖 잔여 density도 같이 구한다(YOLO+DM-Count 보완 추정).
+        # 이 단계 이름에 표시해서, 잔여 없이 끝난 예전 DM-Count 단계를 완료로 착각하지 않게 한다.
+        # frame_stride>1이면 DM-Count 샘플 프레임에 박스가 없을 수 있어(박스 0개 = 전부 잔여로 오인) 끈다.
+        fuse_detections = (Path(detections_csv) if frame_stride == 1 and detections_csv
+                           and Path(detections_csv).is_file() else None)
+        stage = f'dmcount:{model_version}' + (':residual' if fuse_detections is not None else '')
         done = progress.completed(stage) if progress is not None else None
         if done is not None:
             print('extended: DM-Count already completed; skipping it', flush=True)
@@ -254,7 +259,8 @@ def run_extended_zone_pipeline(
                                                  input_scale=dmcount_input_scale,
                                                  heatmap_dir=out / "dmcount_heatmaps",
                                                  checkpoint_path=out / DMCOUNT_CHECKPOINT_NAME if resumable else None,
-                                                 half=dmcount_half)
+                                                 half=dmcount_half,
+                                                 detections_csv=fuse_detections)
             dmcount_paths = {"dmcount_estimates": out / "dmcount_estimates.csv"}
             dmcount.to_csv(dmcount_paths["dmcount_estimates"], index=False)
             precisions = dmcount.attrs.get("windows_by_precision", {})

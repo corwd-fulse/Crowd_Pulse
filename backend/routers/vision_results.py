@@ -278,6 +278,27 @@ def dmcount_density_map(job_id: UUID, filename: str, db: Session = Depends(get_d
     return FileResponse(path, media_type='image/png', filename=filename)
 
 
+@router.get('/{job_id}/results/extended-artifacts/{kind}')
+def extended_artifact(job_id: UUID, kind: str, db: Session = Depends(get_db)):
+    """확장 분석 결과 파일 원본(CSV/JSON) 내려받기. 특히 crowd_speed_individual처럼 DB에 넣지
+    않고 파일로만 보관하는 종류(vision_extended_csv.FILE_ONLY_KINDS)를 받는 유일한 경로다.
+    artifact()와 같은 경로 검증(이 job의 results 디렉터리 밖은 404)."""
+    from app.services import vision_extended_results as extended_service
+    try:
+        extended = extended_service.extended_result_for_job(db, job_id)
+    except extended_service.JobNotFound as exc:
+        raise HTTPException(404, str(exc)) from None
+    entry = (extended.artifacts or {}).get(kind)
+    if not isinstance(entry, dict) or not entry.get('path'):
+        raise HTTPException(404, 'Artifact not found')
+    path = (extended_service.BASE_DIR / entry['path']).resolve()
+    if not path.is_relative_to((extended_service.BASE_DIR / 'uploads/results' / str(job_id)).resolve()) or not path.is_file():
+        raise HTTPException(404, 'Artifact file unavailable')
+    suffix = path.suffix.lower()
+    return FileResponse(path, media_type='application/json' if suffix == '.json' else 'text/csv',
+                        filename=f'{kind}{suffix}')
+
+
 @router.get('/{job_id}/results/model-comparison')
 def model_comparison(job_id: UUID, db: Session = Depends(get_db)):
     """같은 window_start(10초 단위)·zone 기준으로 YOLO 구역 카운트와 DM-Count 추정치를
@@ -310,11 +331,17 @@ def model_comparison(job_id: UUID, db: Session = Depends(get_db)):
         key = (rec['window_start'], rec['zone'])
         yolo_samples = yolo_by_window.get(key)
         density_map_path = rec.get('density_map_path')
+        yolo_count = round(sum(yolo_samples) / len(yolo_samples), 2) if yolo_samples else None
+        # YOLO 박스 밖에 남은 DM-Count density(예전 결과에는 없음 → None). YOLO+DM-Count 보완
+        # 추정 = YOLO 인원 + 그 잔여: YOLO가 놓친 사람(먼 곳·겹침)을 DM-Count로 채운다는 가정.
+        residual = rec.get('yolo_residual_count')
         items.append({
             'job_id': job_id,
             'zone': rec['zone'],
             'window_start': rec['window_start'],
-            'yolo_count': round(sum(yolo_samples) / len(yolo_samples), 2) if yolo_samples else None,
+            'yolo_count': yolo_count,
+            'dmcount_residual_count': residual,
+            'fused_count': round(yolo_count + residual, 2) if yolo_count is not None and residual is not None else None,
             'dmcount_estimated_count': rec['estimated_count'],
             'dmcount_inference_ms': rec['inference_ms'],
             'dmcount_model_version': rec['model_version'],

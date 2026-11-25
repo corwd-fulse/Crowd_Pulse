@@ -97,7 +97,8 @@ def compute(job_id: UUID, work: Path, video: Path, args) -> dict[str, Path]:
     return paths
 
 
-def store(job_id: UUID, work: Path, paths: dict[str, Path] | None, pixels_per_meter: float | None) -> None:
+def store(job_id: UUID, work: Path, paths: dict[str, Path] | None, pixels_per_meter: float | None,
+          replace_dmcount: bool = False, attach_individual_speed: bool = False) -> None:
     from sqlalchemy.orm import Session
 
     from app.database import engine
@@ -111,6 +112,20 @@ def store(job_id: UUID, work: Path, paths: dict[str, Path] | None, pixels_per_me
     if any(not p.is_relative_to(work.resolve()) for p in paths.values()):
         raise SystemExit('EXTENDED_PIPELINE_OUTPUT_PATH_NOT_ALLOWED')
     with Session(engine, expire_on_commit=False) as db:
+        if attach_individual_speed:
+            csv_path = paths.get('crowd_speed_individual') or (work / 'extended' / 'crowd_speed_individual.csv')
+            if not Path(csv_path).is_file():
+                raise SystemExit(f'--attach-individual-speed: {csv_path} not found')
+            extended_storage.attach_file_only_artifact(db, job_id, 'crowd_speed_individual', Path(csv_path))
+            print(f'INDIVIDUAL_SPEED_ATTACHED job {job_id}', flush=True)
+            if not replace_dmcount:
+                return
+        if replace_dmcount:
+            if 'dmcount_estimates' not in paths:
+                raise SystemExit('--replace-dmcount: this run produced no dmcount_estimates')
+            extended_storage.replace_dmcount_estimates(db, job_id, paths['dmcount_estimates'])
+            print(f'DMCOUNT_REPLACED job {job_id}', flush=True)
+            return
         extended_storage.store_extended_result(db, job_id, paths, pixels_per_meter=pixels_per_meter)
     print(f'EXTENDED_STORED job {job_id}', flush=True)
 
@@ -134,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
     mode =parser.add_mutually_exclusive_group()
     mode.add_argument('--compute-only', action='store_true', help='compute without touching the DB (needs --video)')
     mode.add_argument('--store-only', action='store_true', help='store an already computed result')
+    parser.add_argument('--replace-dmcount', action='store_true',
+                        help='the job already has a stored extended result: replace only its DM-Count part '
+                             '(e.g. to add the YOLO-residual column) and keep the other metrics')
+    parser.add_argument('--attach-individual-speed', action='store_true',
+                        help='the job already has a stored extended result without crowd_speed_individual '
+                             '(it used to exceed the 64MiB limit): attach that CSV as a file-only artifact')
     args = parser.parse_args(argv)
     for name in ('dmcount_gamma', 'dmcount_input_scale'):
         value = getattr(args, name)
@@ -158,7 +179,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f'video not found: {video}')
         paths = compute(args.job_id, work, video, args)
     if not args.compute_only:
-        store(args.job_id, work, paths, args.pixels_per_meter)
+        store(args.job_id, work, paths, args.pixels_per_meter, replace_dmcount=args.replace_dmcount,
+              attach_individual_speed=args.attach_individual_speed)
     return 0
 
 

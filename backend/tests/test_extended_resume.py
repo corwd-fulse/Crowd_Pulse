@@ -132,8 +132,9 @@ def _patch_dmcount(monkeypatch, density_fn):
     monkeypatch.setattr(density_estimation, "compute_dmcount_estimates", fake)
 
 
-def test_extended_pipeline_resumes_dmcount_only_without_detections(tmp_path, monkeypatch):
-    """base 지표가 끝난 뒤 DM-Count 중에 끊기면, 다른 컴퓨터에서 추적 CSV 없이 DM-Count만 이어간다."""
+def test_extended_pipeline_resumes_dmcount_only_on_another_machine(tmp_path, monkeypatch):
+    """base 지표가 끝난 뒤 DM-Count 중에 끊기면, 다른 컴퓨터에서 DM-Count만 이어간다. 처음 계산이
+    YOLO 잔여를 구했으므로 추적 CSV(det.csv)는 같이 옮긴다 — 없으면 아래 테스트처럼 멈춘다."""
     server = tmp_path / "server"
     server.mkdir()
     _write_video(server / "v.mp4")
@@ -149,28 +150,31 @@ def test_extended_pipeline_resumes_dmcount_only_without_detections(tmp_path, mon
     assert set(progress["stages"]) == {"base"}
     assert (server / "out" / DMCOUNT_CHECKPOINT_NAME).is_file()
 
-    # 다른 컴퓨터: 추적 CSV 없이 out/ + 영상 + 가중치만 복사
+    # 다른 컴퓨터: out/ + 영상 + 가중치 + 추적 CSV 복사
     local = tmp_path / "local"
     local.mkdir()
     shutil.copytree(server / "out", local / "out")
     shutil.copy(server / "v.mp4", local / "v.mp4")
     shutil.copy(weights, local / "w.pth")
+    shutil.copy(server / "det.csv", local / "det.csv")
     fn = CountingDensity()
     _patch_dmcount(monkeypatch, fn)
-    paths = run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "missing.csv"), [ZONE], str(local / "out"),
+    paths = run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "det.csv"), [ZONE], str(local / "out"),
                                        dmcount_model_path=str(local / "w.pth"), resumable=True)
 
     assert fn.calls == 3 * 4
     assert set(paths) == {"dwell_times", "counter_flow", "queue_scores", "density_heatmap",
                           "tracking_quality", "dmcount_estimates"}
     assert all(str(p).startswith(str(local / "out")) for p in paths.values())
-    assert len(pd.read_csv(paths["dmcount_estimates"])) == 6
+    estimates = pd.read_csv(paths["dmcount_estimates"])
+    assert len(estimates) == 6
+    assert estimates["yolo_residual_count"].notna().all()
     assert not (local / "out" / DMCOUNT_CHECKPOINT_NAME).exists()
 
     # 다 끝난 뒤 다시 부르면 아무것도 재계산하지 않는다.
     again = CountingDensity()
     _patch_dmcount(monkeypatch, again)
-    assert run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "missing.csv"), [ZONE], str(local / "out"),
+    assert run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "det.csv"), [ZONE], str(local / "out"),
                                       dmcount_model_path=str(local / "w.pth"), resumable=True) == paths
     assert again.calls == 0
 
@@ -224,4 +228,59 @@ def test_extended_pipeline_records_dmcount_precision(tmp_path, monkeypatch):
     run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(tmp_path / "out"),
                                dmcount_model_path=str(weights), resumable=True, dmcount_half=True)
     progress = json.loads((tmp_path / "out" / EXTENDED_PROGRESS_NAME).read_text())
-    assert progress["meta"]["dmcount:dmcount_qnrf"] == {"windows_by_precision": {"fp16": 6}}
+    assert progress["meta"]["dmcount:dmcount_qnrf:residual"] == {"windows_by_precision": {"fp16": 6}}
+
+
+def test_residual_checkpoint_without_detections_stops_instead_of_restarting(tmp_path):
+    """YOLO 잔여까지 구하던 계산을 추적 CSV 없이 이어가려 하면 조용히 처음부터 돌리지 않고 멈춘다."""
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    _write_detections(tmp_path / "det.csv")
+    ckpt = tmp_path / "ckpt.json"
+    with pytest.raises(Crash):
+        _run(video, CountingDensity(crash_after=7), checkpoint_path=ckpt, detections_csv=tmp_path / "det.csv")
+    fn = CountingDensity()
+    with pytest.raises(ValueError, match="video_detections"):
+        _run(video, fn, checkpoint_path=ckpt)
+    assert fn.calls == 0
+    resumed = CountingDensity()
+    _run(video, resumed, checkpoint_path=ckpt, detections_csv=tmp_path / "det.csv")
+    assert resumed.calls == 3 * 4
+
+
+def test_uncovered_mask_excludes_padded_boxes():
+    boxes = np.array([[10, 10, 20, 20]], dtype=np.float32)  # 프레임 120x120 → map 12x12 (1/10)
+    mask = density_estimation._uncovered_mask(boxes, (120, 120), (12, 12))
+    # 10% 여유(1px)를 넣으면 9..21px → 칸 0..3 (끝 칸 포함)
+    assert (~mask).sum() == 16
+    assert not mask[0:4, 0:4].any() and mask[4:, :].all()
+    assert density_estimation._uncovered_mask(np.empty((0, 4), np.float32), (120, 120), (12, 12)).all()
+
+
+def test_residual_is_density_outside_yolo_boxes(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    _write_detections(tmp_path / "det.csv")
+    plain = _run(video, CountingDensity())
+    fused = _run(video, CountingDensity(), detections_csv=tmp_path / "det.csv")
+    assert "yolo_residual_count" not in plain.columns
+    pd.testing.assert_frame_equal(fused.drop(columns="yolo_residual_count"), plain)
+    # 박스가 모든 프레임에 하나씩 있으므로 잔여는 전체보다 작고 0보다 크다.
+    assert ((fused["yolo_residual_count"] < fused["estimated_count"]) | (fused["estimated_count"] == 0)).all()
+    assert (fused["yolo_residual_count"] >= 0).all()
+
+
+def test_dmcount_csv_with_and_without_residual_validates(tmp_path):
+    from app.services.vision_extended_csv import InvalidExtendedResult, _read_csv_rows
+
+    base = "window_start,zone,estimated_count,inference_ms,model_version,density_map_path"
+    old = tmp_path / "old.csv"
+    old.write_text(base + "\n0,A,2.5,10.0,dmcount_qnrf,\n", encoding="utf-8")
+    new = tmp_path / "new.csv"
+    new.write_text(base + ",yolo_residual_count\n0,A,2.5,10.0,dmcount_qnrf,,0.75\n", encoding="utf-8")
+    assert "yolo_residual_count" not in _read_csv_rows(old, "dmcount_estimates")[0]
+    assert _read_csv_rows(new, "dmcount_estimates")[0]["yolo_residual_count"] == 0.75
+    bad = tmp_path / "bad.csv"
+    bad.write_text(base + ",yolo_residual_count\n0,A,2.5,10.0,dmcount_qnrf,,-1\n", encoding="utf-8")
+    with pytest.raises(InvalidExtendedResult):
+        _read_csv_rows(bad, "dmcount_estimates")
