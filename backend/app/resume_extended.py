@@ -16,8 +16,12 @@ run_extended_zone_pipeline(resumable=True)을 다시 호출하면, 끝난 단계
         --dmcount-model-path models/dmcount_qnrf.pth --dmcount-gamma 1.5 --dmcount-input-scale 1.5 \\
         --pixels-per-meter 50 [--dmcount-fp16] [--compute-only | --store-only] [--work-dir DIR] [--video PATH]
 
---dmcount-fp16: 3GB급 작은 GPU용(메모리 약 절반). fp32로 하다 끊긴 계산도 fp16으로 이어갈 수
-있고, 어느 정밀도로 몇 개 윈도우를 계산했는지는 extended/extended_progress.json의 meta에 남는다.
+--dmcount-fp16: Volta 이후(텐서코어 있는) GPU에서 메모리를 약 절반으로 줄인다. fp32로 하다 끊긴
+계산도 fp16으로 이어갈 수 있고, 어느 정밀도로 몇 개 윈도우를 계산했는지는
+extended/extended_progress.json의 meta에 남는다.
+주의: GTX 10xx(Pascal)에서는 쓰지 말 것 — GTX 1060 3GB 실측(2880x1620 입력)에서 fp16이 fp32보다
+3.7배 느리고(3.5s vs 0.94s/장) 메모리도 더 썼다(3.4 vs 2.4 GiB, 3GB를 넘어 시스템 메모리로
+넘침). 그 GPU에서는 fp32가 이미 들어간다.
 
 설정값(gamma/input-scale/pixels-per-meter)은 원래 worker 실행 때와 같아야 이어진다 — 다르면
 서명이 맞지 않아 처음부터 다시 계산한다(조용히 섞인 결과를 만들지 않도록).
@@ -124,8 +128,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--dmcount-gamma', type=float, default=1.0)
     parser.add_argument('--dmcount-input-scale', type=float, default=1.0)
     parser.add_argument('--dmcount-fp16', action='store_true',
-                        help='fp16 DM-Count (about half the GPU memory, CUDA only). May continue an fp32 '
-                             'checkpoint; how many windows ran in each precision is kept in extended_progress.json')
+                        help='fp16 DM-Count (about half the GPU memory on Volta+ GPUs, CUDA only). May continue an '
+                             'fp32 checkpoint; how many windows ran in each precision is kept in extended_progress.json. '
+                             'Not for Pascal/GTX 10xx: slower and uses more memory there (measured on GTX 1060)')
     mode =parser.add_mutually_exclusive_group()
     mode.add_argument('--compute-only', action='store_true', help='compute without touching the DB (needs --video)')
     mode.add_argument('--store-only', action='store_true', help='store an already computed result')

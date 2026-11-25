@@ -650,7 +650,9 @@ def main():
     parser.add_argument('--dmcount-input-scale',type=float,default=1.0,
                         help='Resize factor for DM-Count input (>1 helps small, distant people; default 1.0)')
     parser.add_argument('--dmcount-fp16',action='store_true',
-                        help='Run DM-Count in fp16 to roughly halve GPU memory (small GPUs); CUDA only, default fp32')
+                        help='Run DM-Count in fp16 to roughly halve GPU memory on Volta+ GPUs (tensor cores); CUDA only, '
+                             'default fp32. Do NOT use on Pascal (GTX 10xx): measured on a GTX 1060 it was 3.7x slower '
+                             'and used MORE memory (3.4 vs 2.4 GiB at 2880x1620) — fp32 already fits there')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
