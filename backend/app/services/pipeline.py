@@ -6,7 +6,9 @@ FastAPI 라우터나 CLI에서 이 함수 하나만 호출하면 구역 통계·
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 from pathlib import Path
 import time
 
@@ -169,6 +171,7 @@ def run_extended_zone_pipeline(
     dmcount_device: str = 'cpu',
     dmcount_gamma: float = 1.0,
     dmcount_input_scale: float = 1.0,
+    resumable: bool = False,
 ) -> dict[str, str]:
     """밀집 히트맵·체류 시간·역방향 비율·대기열 점수·추적 품질 평가, 별도 CSV 산출.
 
@@ -195,6 +198,13 @@ def run_extended_zone_pipeline(
     그 계약을 깨지 않도록 이 함수는 완전히 별도의 파일/딕셔너리로 결과를 낸다. worker.py가
     이 결과를 vision_extended_results.py를 통해 별도 테이블(vision_extended_results)에 저장하며,
     그 저장은 core 결과 저장이 끝난 뒤에만 일어나고 실패해도 job 상태에는 영향을 주지 않는다.
+
+    resumable: True면 out_dir에 단계별 진행 기록(EXTENDED_PROGRESS_NAME)을 남겨, 중간에
+    끊긴 뒤 같은 out_dir로 다시 호출하면 끝난 단계는 건너뛴다. (1) DM-Count를 뺀 나머지
+    지표는 한 묶음으로 끝나는 즉시 파일 sha256과 함께 기록되고, (2) DM-Count는 10초 윈도우마다
+    체크포인트(DMCOUNT_CHECKPOINT_NAME)를 남긴다. (1)이 이미 끝난 out_dir이면 detections_csv가
+    없어도 된다 — 그래서 out_dir만 다른 컴퓨터로 복사해 DM-Count만 다른 GPU로 이어 계산할 수
+    있다. 기본값 False는 기존 동작과 동일(진행 기록 파일을 만들지 않음).
     """
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,6 +216,131 @@ def run_extended_zone_pipeline(
     finally:
         cap.release()
 
+    progress = _ExtendedProgress(out, _extended_base_fingerprint(
+        video_path, zones, fps=fps, width=width, height=height,
+        pixels_per_meter=pixels_per_meter, frame_stride=frame_stride,
+    )) if resumable else None
+    paths = progress.completed('base') if progress is not None else None
+    if paths is not None:
+        print(f'extended: base metrics already completed in {out}; skipping them', flush=True)
+    else:
+        paths = _compute_extended_base(
+            video_path, detections_csv, zones, out, fps=fps, width=width, height=height,
+            pixels_per_meter=pixels_per_meter, zone_timeseries=zone_timeseries,
+            motion_timeseries=motion_timeseries, individual_directions=individual_directions,
+            frame_stride=frame_stride,
+        )
+        if progress is not None:
+            progress.mark('base', paths)
+
+    if dmcount_model_path is not None:
+        from .density_estimation import compute_dmcount_estimates
+        # 보정 설정을 model_version에 남겨 대시보드/DB에서 어떤 입력 조건의 추정치인지 구분한다.
+        model_version = "dmcount_qnrf"
+        if dmcount_gamma != 1.0 or dmcount_input_scale != 1.0:
+            model_version += f"_g{dmcount_gamma:g}_s{dmcount_input_scale:g}"
+        stage = f'dmcount:{model_version}'
+        done = progress.completed(stage) if progress is not None else None
+        if done is not None:
+            print('extended: DM-Count already completed; skipping it', flush=True)
+            paths.update(done)
+        else:
+            dmcount = compute_dmcount_estimates(video_path, zones, fps=fps, model_path=dmcount_model_path, device=dmcount_device,
+                                                 model_version=model_version, gamma=dmcount_gamma,
+                                                 input_scale=dmcount_input_scale,
+                                                 heatmap_dir=out / "dmcount_heatmaps",
+                                                 checkpoint_path=out / DMCOUNT_CHECKPOINT_NAME if resumable else None)
+            dmcount_paths = {"dmcount_estimates": out / "dmcount_estimates.csv"}
+            dmcount.to_csv(dmcount_paths["dmcount_estimates"], index=False)
+            if progress is not None:
+                progress.mark(stage, dmcount_paths)
+            paths.update(dmcount_paths)
+    return {k: str(v) for k, v in paths.items()}
+
+
+EXTENDED_PROGRESS_NAME = 'extended_progress.json'
+DMCOUNT_CHECKPOINT_NAME = 'dmcount_checkpoint.json'
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _extended_base_fingerprint(video_path: str, zones: list[Zone], **settings) -> str:
+    # 영상 경로/mtime은 넣지 않는다 — out_dir을 다른 컴퓨터로 옮겨 이어가는 경우를 허용하기
+    # 위해서다(density_estimation._dmcount_fingerprint와 같은 이유). 같은 영상인지는 크기로 본다.
+    payload = dict(video_size=os.path.getsize(video_path),
+                   zones=[(z.name, z.polygon) for z in zones], **settings)
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+class _ExtendedProgress:
+    """run_extended_zone_pipeline(resumable=True)의 단계별 완료 기록.
+
+    stage마다 {kind: (out_dir 기준 상대 파일명, sha256)}를 저장하고, 다시 읽을 때 서명이 같고
+    파일들이 그대로(같은 sha256) 있을 때만 "완료"로 인정한다. 하나라도 어긋나면 그 단계는
+    처음부터 다시 계산한다(조용히 깨진 결과를 재사용하지 않도록).
+    """
+
+    def __init__(self, out: Path, fingerprint: str):
+        self.out = out
+        self.path = out / EXTENDED_PROGRESS_NAME
+        state = None
+        if self.path.is_file():
+            try:
+                state = json.loads(self.path.read_text(encoding='utf-8'))
+            except (OSError, ValueError):
+                state = None
+        if not state or state.get('fingerprint') != fingerprint:
+            if state:
+                print('extended: progress record does not match this video/zones/settings; recomputing', flush=True)
+            state = {'fingerprint': fingerprint, 'stages': {}}
+        self.state = state
+
+    def completed(self, stage: str) -> dict[str, Path] | None:
+        files = self.state['stages'].get(stage)
+        if files is None:
+            return None
+        paths = {}
+        for kind, info in files.items():
+            path = self.out / info['file']
+            if not path.is_file() or _sha256_file(path) != info['sha256']:
+                print(f'extended: {stage} output {info["file"]} missing or changed; recomputing {stage}', flush=True)
+                return None
+            paths[kind] = path
+        return paths
+
+    def mark(self, stage: str, paths: dict[str, Path]) -> None:
+        self.state['stages'][stage] = {
+            kind: {'file': Path(path).resolve().relative_to(self.out.resolve()).as_posix(),
+                   'sha256': _sha256_file(Path(path))}
+            for kind, path in paths.items()
+        }
+        tmp = self.path.with_name(self.path.name + '.tmp')
+        tmp.write_text(json.dumps(self.state, indent=2), encoding='utf-8')
+        os.replace(tmp, self.path)
+
+
+def _compute_extended_base(
+    video_path: str,
+    detections_csv: str,
+    zones: list[Zone],
+    out: Path,
+    *,
+    fps: float,
+    width: int,
+    height: int,
+    pixels_per_meter: PixelsPerMeter | None,
+    zone_timeseries: pd.DataFrame | None,
+    motion_timeseries: pd.DataFrame | None,
+    individual_directions: pd.DataFrame | None,
+    frame_stride: int,
+) -> dict[str, Path]:
+    """DM-Count를 뺀 확장 지표 묶음(체류/역방향/대기열/밀집 히트맵/추적 품질/속도)."""
     # detections.csv를 한 번만 읽어 아래 네 함수 모두에 DataFrame으로 넘긴다 — 안 그러면
     # dwell/counter_flow/density_heatmap/tracking_quality가 각자 같은 파일을 다시 파싱한다
     # (장시간 영상일수록 그 비용이 커지는, Optical Flow 이중계산과 같은 종류의 비효율).
@@ -250,19 +385,4 @@ def run_extended_zone_pipeline(
             )
             paths["crowd_speed_individual"] = out / "crowd_speed_individual.csv"
             individual_speed.to_csv(paths["crowd_speed_individual"], index=False)
-
-    if dmcount_model_path is not None:
-        from .density_estimation import compute_dmcount_estimates
-
-        # 보정 설정을 model_version에 남겨 대시보드/DB에서 어떤 입력 조건의 추정치인지 구분한다.
-        model_version = "dmcount_qnrf"
-        if dmcount_gamma != 1.0 or dmcount_input_scale != 1.0:
-            model_version += f"_g{dmcount_gamma:g}_s{dmcount_input_scale:g}"
-        dmcount = compute_dmcount_estimates(video_path, zones, fps=fps, model_path=dmcount_model_path, device=dmcount_device,
-                                             model_version=model_version, gamma=dmcount_gamma,
-                                             input_scale=dmcount_input_scale,
-                                             heatmap_dir=out / "dmcount_heatmaps")
-        paths["dmcount_estimates"] = out / "dmcount_estimates.csv"
-        dmcount.to_csv(paths["dmcount_estimates"], index=False)
-
-    return {k: str(v) for k, v in paths.items()}
+    return paths

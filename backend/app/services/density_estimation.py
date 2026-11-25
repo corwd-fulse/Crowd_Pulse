@@ -25,6 +25,9 @@ gamma=1.0)은 그 가설에 대한 대응 — 모델에 넣기 전에 어두운 
 
 from __future__ import annotations
 
+import hashlib
+import json
+import os
 import time
 from pathlib import Path
 from typing import Callable
@@ -128,6 +131,68 @@ def _zone_mask_at(zone: Zone, frame_shape: tuple[int, int], map_shape: tuple[int
     return mask
 
 
+DMCOUNT_CHECKPOINT_VERSION = 1
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _dmcount_fingerprint(**payload) -> str:
+    """DM-Count 체크포인트가 같은 (영상,구역,설정,가중치)에서 만든 것인지 확인하는 서명.
+
+    optical_flow.py의 checkpoint 서명과 달리 영상 *경로*와 mtime은 넣지 않는다 — GPU 서버에서
+    끊긴 계산을 다른 컴퓨터(다른 GPU)로 옮겨 이어갈 수 있어야 하기 때문이다. 대신 영상 크기·
+    프레임 수·fps·해상도와 가중치 파일 sha256으로 "같은 입력"을 판단한다.
+    """
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
+class _DmcountCheckpoint:
+    """윈도우 하나가 끝날 때마다 그때까지의 행과 다음 window_start를 JSON 하나로 원자적으로
+    교체 저장한다(tmp에 쓰고 os.replace). 행의 히트맵은 절대경로가 아니라 파일 이름만 저장해서,
+    작업 디렉터리를 다른 컴퓨터로 복사해도 그대로 이어갈 수 있다."""
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+
+    def load(self, fingerprint: str, heatmap_dir: Path | None) -> tuple[float, list[dict]] | None:
+        if not self.path.is_file():
+            return None
+        try:
+            state = json.loads(self.path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as exc:
+            print(f'dmcount checkpoint unreadable ({exc!r}); starting DM-Count from the beginning', flush=True)
+            return None
+        if state.get('version') != DMCOUNT_CHECKPOINT_VERSION or state.get('fingerprint') != fingerprint:
+            print('dmcount checkpoint does not match this video/zones/settings/weights; '
+                  'starting DM-Count from the beginning', flush=True)
+            return None
+        rows = state.get('rows', [])
+        for row in rows:
+            name = row.get('density_map_path')
+            if name and (heatmap_dir is None or not (heatmap_dir / name).is_file()):
+                print(f'dmcount checkpoint heatmap {name} missing; starting DM-Count from the beginning', flush=True)
+                return None
+        return float(state['next_window_start']), rows
+
+    def save(self, fingerprint: str, next_window_start: float, rows: list[dict]) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_name(self.path.name + '.tmp')
+        tmp.write_text(json.dumps({
+            'version': DMCOUNT_CHECKPOINT_VERSION, 'fingerprint': fingerprint,
+            'next_window_start': next_window_start, 'rows': rows,
+        }), encoding='utf-8')
+        os.replace(tmp, self.path)
+
+    def clear(self) -> None:
+        self.path.unlink(missing_ok=True)
+
+
 def compute_dmcount_estimates(
     video_path: str,
     zones: list[Zone],
@@ -142,6 +207,7 @@ def compute_dmcount_estimates(
     input_scale: float = 1.0,
     heatmap_dir: Path | str | None = None,
     density_fn: DensityFn | None = None,
+    checkpoint_path: Path | str | None = None,
 ) -> pd.DataFrame:
     """반환: columns = [window_start, zone, estimated_count, inference_ms, model_version,
     density_map_path].
@@ -165,6 +231,10 @@ def compute_dmcount_estimates(
     주입하는 가짜 추정 함수. 생략하면(기본값) model_path의 실제 DM-Count 가중치로 추론한다.
     gamma 보정은 density_fn을 쓸 때도 똑같이 적용된다(추정 함수가 아니라 프레임 읽기
     직후에 적용하므로).
+    checkpoint_path: 지정하면 윈도우 하나가 끝날 때마다 진행 상태를 이 JSON에 저장하고, 같은
+    서명(_dmcount_fingerprint)의 체크포인트가 이미 있으면 그 다음 윈도우부터 이어서 계산한다.
+    서명에 영상 경로가 없으므로 작업 디렉터리를 다른 컴퓨터로 옮겨서(다른 GPU/device로)
+    이어가도 된다. 정상 종료 시 체크포인트 파일은 삭제한다. 생략하면 기존 동작과 동일.
     """
     if window_s <= 0:
         raise ValueError("window_s must be positive")
@@ -191,8 +261,23 @@ def compute_dmcount_estimates(
             return pd.DataFrame(columns=columns)
 
         duration_s = total_frames / fps
-        rows = []
+        rows: list[dict] = []
         window_start = 0.0
+        checkpoint = fingerprint = None
+        if checkpoint_path is not None:
+            checkpoint = _DmcountCheckpoint(Path(checkpoint_path))
+            fingerprint = _dmcount_fingerprint(
+                video_size=os.path.getsize(video_path), total_frames=total_frames, fps=fps,
+                frame_size=(frame_w, frame_h), zones=[(z.name, z.polygon) for z in zones],
+                model_version=model_version, window_s=window_s, samples_per_window=samples_per_window,
+                gamma=gamma, input_scale=input_scale, heatmaps=heatmap_dir is not None,
+                weights='injected' if density_fn is not None else _file_sha256(Path(model_path)),
+            )
+            restored = checkpoint.load(fingerprint, heatmap_dir)
+            if restored is not None:
+                window_start, rows = restored
+                print(f'dmcount: resuming from checkpoint at {window_start:g}s / {duration_s:.0f}s '
+                      f'({len(rows)} rows restored)', flush=True)
         while window_start < duration_s:
             # 윈도우 경계에 걸치지 않도록 내부 균등 간격 지점을 쓴다(0초/10초 자체가 아니라
             # 그 사이 (1/(n+1), 2/(n+1), ...) 지점). 영상 끝에 걸린 마지막 윈도우는
@@ -222,11 +307,11 @@ def compute_dmcount_estimates(
                     mask = _zone_mask_at(zone, (frame_h, frame_w), density_map.shape)
                     counts_per_zone[zone.name].append(float(density_map[mask == 1].sum()))
 
-            heatmap_path = None
+            # 행에는 히트맵 파일 이름만 넣고, 절대경로는 반환 직전에 붙인다(체크포인트 이식성).
+            heatmap_name = None
             if heatmap_dir is not None and last_density_map is not None:
-                heatmap_path = heatmap_dir / f"window_{int(window_start)}.png"
-                _save_heatmap(last_density_map, heatmap_path)
-                heatmap_path = str(heatmap_path)
+                heatmap_name = f"window_{int(window_start)}.png"
+                _save_heatmap(last_density_map, heatmap_dir / heatmap_name)
 
             for zone in zones:
                 samples = counts_per_zone[zone.name]
@@ -238,9 +323,18 @@ def compute_dmcount_estimates(
                     "estimated_count": round(sum(samples) / len(samples), 2),
                     "inference_ms": round(total_inference_ms, 1),
                     "model_version": model_version,
-                    "density_map_path": heatmap_path,
+                    "density_map_path": heatmap_name,
                 })
             window_start += window_s
-        return pd.DataFrame(rows, columns=columns)
+            if checkpoint is not None:
+                checkpoint.save(fingerprint, window_start, rows)
+        if heatmap_dir is not None:
+            for row in rows:
+                if row["density_map_path"]:
+                    row["density_map_path"] = str(heatmap_dir / row["density_map_path"])
+        result = pd.DataFrame(rows, columns=columns)
+        if checkpoint is not None:
+            checkpoint.clear()
+        return result
     finally:
         cap.release()

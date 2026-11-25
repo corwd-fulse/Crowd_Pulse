@@ -1,0 +1,193 @@
+"""확장 분석 이어하기: DM-Count 윈도우 체크포인트 + 단계별 진행 기록."""
+import csv
+import json
+import shutil
+
+import cv2
+import numpy as np
+import pandas as pd
+import pytest
+
+from app.services import density_estimation
+from app.services.density_estimation import compute_dmcount_estimates
+from app.services.pipeline import DMCOUNT_CHECKPOINT_NAME, EXTENDED_PROGRESS_NAME, run_extended_zone_pipeline
+from app.services.zone_analysis import Zone
+
+ZONE = Zone("A", [(0, 0), (120, 0), (120, 120), (0, 120)])
+
+
+class Crash(Exception):
+    pass
+
+
+def _write_video(path, n_frames=60, fps=10, size=120):
+    writer = cv2.VideoWriter(str(path), cv2.VideoWriter_fourcc(*"mp4v"), fps, (size, size))
+    for i in range(n_frames):
+        writer.write(np.full((size, size, 3), (i * 4) % 255, dtype=np.uint8))
+    writer.release()
+
+
+def _write_detections(path):
+    with open(path, "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["frame", "t_ms", "track_id", "x1", "y1", "x2", "y2", "conf"])
+        w.writerows([[f, f * 100, 1, 10 + f, 10, 20 + f, 20, 0.9] for f in range(60)])
+
+
+class CountingDensity:
+    """프레임 밝기에 따라 값이 달라지는 가짜 추정기. crash_after번째 호출에서 예외를 던져
+    worker가 죽는 상황을 흉내 낸다."""
+
+    def __init__(self, crash_after=None):
+        self.calls = 0
+        self.crash_after = crash_after
+
+    def __call__(self, frame):
+        if self.crash_after is not None and self.calls >= self.crash_after:
+            raise Crash()
+        self.calls += 1
+        return np.full((12, 12), float(frame.mean()) / 100, dtype=np.float32), 1.0
+
+
+def _run(video, density_fn, **kwargs):
+    kwargs.setdefault("window_s", 1)
+    return compute_dmcount_estimates(str(video), [ZONE], fps=10, density_fn=density_fn, **kwargs)
+
+
+def test_dmcount_resumes_after_crash_and_matches_uninterrupted_run(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    expected = _run(video, CountingDensity(), heatmap_dir=tmp_path / "ref_heat")
+
+    ckpt = tmp_path / "work" / "ckpt.json"
+    heat = tmp_path / "work" / "heat"
+    with pytest.raises(Crash):
+        _run(video, CountingDensity(crash_after=7), heatmap_dir=heat, checkpoint_path=ckpt)
+    state = json.loads(ckpt.read_text())
+    assert state["next_window_start"] == 2  # 3장씩, 7번째 호출 직전 = 윈도우 2개 완료
+
+    resumed_fn = CountingDensity()
+    result = _run(video, resumed_fn, heatmap_dir=heat, checkpoint_path=ckpt)
+
+    assert resumed_fn.calls == 3 * 4  # 남은 윈도우(2~5초)만 추론
+    pd.testing.assert_frame_equal(result.drop(columns="density_map_path"),
+                                  expected.drop(columns="density_map_path"))
+    assert result["density_map_path"].map(lambda p: p.startswith(str(heat))).all()
+    assert not ckpt.exists()  # 정상 종료 시 삭제
+
+
+def test_dmcount_checkpoint_with_different_settings_restarts(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    ckpt = tmp_path / "ckpt.json"
+    with pytest.raises(Crash):
+        _run(video, CountingDensity(crash_after=7), checkpoint_path=ckpt)
+
+    fn = CountingDensity()
+    _run(video, fn, checkpoint_path=ckpt, gamma=1.5)
+    assert fn.calls == 3 * 6  # 서명 불일치 → 처음부터
+
+
+def test_dmcount_checkpoint_survives_moving_to_another_machine(tmp_path):
+    """경로가 바뀌어도(다른 컴퓨터로 복사) 이어진다 — 서명에 경로/mtime이 없다."""
+    server = tmp_path / "server"
+    server.mkdir()
+    _write_video(server / "v.mp4")
+    with pytest.raises(Crash):
+        _run(server / "v.mp4", CountingDensity(crash_after=10), heatmap_dir=server / "heat",
+             checkpoint_path=server / "ckpt.json")
+
+    local = tmp_path / "local"
+    shutil.copytree(server, local)
+    fn = CountingDensity()
+    result = _run(local / "v.mp4", fn, heatmap_dir=local / "heat", checkpoint_path=local / "ckpt.json")
+    assert fn.calls == 3 * 3
+    assert sorted(result["window_start"]) == [0, 1, 2, 3, 4, 5]
+    assert result["density_map_path"].map(lambda p: p.startswith(str(local / "heat"))).all()
+
+
+def test_dmcount_checkpoint_missing_heatmap_restarts(tmp_path):
+    video = tmp_path / "v.mp4"
+    _write_video(video)
+    heat, ckpt = tmp_path / "heat", tmp_path / "ckpt.json"
+    with pytest.raises(Crash):
+        _run(video, CountingDensity(crash_after=7), heatmap_dir=heat, checkpoint_path=ckpt)
+    (heat / "window_0.png").unlink()
+    fn = CountingDensity()
+    _run(video, fn, heatmap_dir=heat, checkpoint_path=ckpt)
+    assert fn.calls == 3 * 6
+
+
+_ORIGINAL_DMCOUNT = density_estimation.compute_dmcount_estimates
+
+
+def _patch_dmcount(monkeypatch, density_fn):
+    original = _ORIGINAL_DMCOUNT
+
+    def fake(*args, **kwargs):
+        kwargs["density_fn"] = density_fn
+        kwargs["window_s"] = 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(density_estimation, "compute_dmcount_estimates", fake)
+
+
+def test_extended_pipeline_resumes_dmcount_only_without_detections(tmp_path, monkeypatch):
+    """base 지표가 끝난 뒤 DM-Count 중에 끊기면, 다른 컴퓨터에서 추적 CSV 없이 DM-Count만 이어간다."""
+    server = tmp_path / "server"
+    server.mkdir()
+    _write_video(server / "v.mp4")
+    _write_detections(server / "det.csv")
+    weights = server / "w.pth"
+    weights.write_bytes(b"not-really-weights")
+
+    _patch_dmcount(monkeypatch, CountingDensity(crash_after=7))
+    with pytest.raises(Crash):
+        run_extended_zone_pipeline(str(server / "v.mp4"), str(server / "det.csv"), [ZONE], str(server / "out"),
+                                   dmcount_model_path=str(weights), resumable=True)
+    progress = json.loads((server / "out" / EXTENDED_PROGRESS_NAME).read_text())
+    assert set(progress["stages"]) == {"base"}
+    assert (server / "out" / DMCOUNT_CHECKPOINT_NAME).is_file()
+
+    # 다른 컴퓨터: 추적 CSV 없이 out/ + 영상 + 가중치만 복사
+    local = tmp_path / "local"
+    local.mkdir()
+    shutil.copytree(server / "out", local / "out")
+    shutil.copy(server / "v.mp4", local / "v.mp4")
+    shutil.copy(weights, local / "w.pth")
+    fn = CountingDensity()
+    _patch_dmcount(monkeypatch, fn)
+    paths = run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "missing.csv"), [ZONE], str(local / "out"),
+                                       dmcount_model_path=str(local / "w.pth"), resumable=True)
+
+    assert fn.calls == 3 * 4
+    assert set(paths) == {"dwell_times", "counter_flow", "queue_scores", "density_heatmap",
+                          "tracking_quality", "dmcount_estimates"}
+    assert all(str(p).startswith(str(local / "out")) for p in paths.values())
+    assert len(pd.read_csv(paths["dmcount_estimates"])) == 6
+    assert not (local / "out" / DMCOUNT_CHECKPOINT_NAME).exists()
+
+    # 다 끝난 뒤 다시 부르면 아무것도 재계산하지 않는다.
+    again = CountingDensity()
+    _patch_dmcount(monkeypatch, again)
+    assert run_extended_zone_pipeline(str(local / "v.mp4"), str(local / "missing.csv"), [ZONE], str(local / "out"),
+                                      dmcount_model_path=str(local / "w.pth"), resumable=True) == paths
+    assert again.calls == 0
+
+
+def test_extended_pipeline_recomputes_base_when_output_changed(tmp_path):
+    _write_video(tmp_path / "v.mp4")
+    _write_detections(tmp_path / "det.csv")
+    out = tmp_path / "out"
+    run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(out), resumable=True)
+    original = (out / "dwell_times.csv").read_text()
+    (out / "dwell_times.csv").write_text("corrupted")
+    run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(out), resumable=True)
+    assert (out / "dwell_times.csv").read_text() == original
+
+
+def test_extended_pipeline_default_writes_no_progress_files(tmp_path):
+    _write_video(tmp_path / "v.mp4")
+    _write_detections(tmp_path / "det.csv")
+    run_extended_zone_pipeline(str(tmp_path / "v.mp4"), str(tmp_path / "det.csv"), [ZONE], str(tmp_path / "out"))
+    assert not (tmp_path / "out" / EXTENDED_PROGRESS_NAME).exists()

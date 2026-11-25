@@ -572,8 +572,14 @@ class Worker:
             if claim.analysis_profile == 'full' and self.enable_extended:
                 try:
                     if self.extended_pipeline is None:
+                        from functools import partial
                         from app.services.pipeline import run_extended_zone_pipeline
-                        extended = run_extended_zone_pipeline
+                        # resumable: leaves extended_progress.json + a per-window DM-Count
+                        # checkpoint in out/extended, so `python -m app.resume_extended <job>`
+                        # can finish this step later (even on another machine/GPU) if the
+                        # worker dies here. The job itself is already succeeded at this point,
+                        # so recover_interrupted() never picks this step back up on its own.
+                        extended = partial(run_extended_zone_pipeline, resumable=True)
                     else:
                         extended = self.extended_pipeline
                     # Reuse what run_zone_pipeline() already computed instead of re-running
