@@ -443,6 +443,25 @@ def test_resumed_success_stores_exactly_once_and_blocks_concurrent_worker(db,tmp
 
 
 @pytest.mark.integration
+def test_crash_before_first_flow_checkpoint_reuses_tracking(db,tmp_path,monkeypatch):
+    """추적은 끝났지만 Optical Flow가 첫 checkpoint를 쓰기 전에 죽으면(파일 없음), 실패시키지 않고
+    추적 결과를 재사용해 Optical Flow만 처음부터 다시 한다."""
+    crashed = _CrashedJob(db, tmp_path, monkeypatch)
+    crashed.checkpoint_path.unlink()
+
+    worker2 = crashed.make_worker()
+    with worker2.exclusive():
+        assert worker2.recover_interrupted()==1
+        db.expire_all()
+        assert db.get(AnalysisJob,crashed.job.id).status=='queued'
+        result=worker2.run_once()
+    assert result['status']=='succeeded',result
+    worker2.track.assert_not_called()
+    db.expire_all()
+    assert db.get(VisionResult,crashed.job.id) is not None
+
+
+@pytest.mark.integration
 def test_corrupted_checkpoint_after_crash_fails_with_clear_reason_not_silent_resume(db,tmp_path,monkeypatch):
     """checkpoint가 죽은 뒤 손상되면(디스크 오류 등) 임의로 재개하지 않고, 구체적인 사유와
     함께 failed로 마감한다 — WORKER_INTERRUPTED_NO_RESUME 안에 RESUME_CHECKPOINT_INVALID."""

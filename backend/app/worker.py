@@ -266,7 +266,11 @@ class Worker:
         checkpoint_path = Path(manifest['checkpoint_path'])
         from app.services.optical_flow import inspect_checkpoint
         status = inspect_checkpoint(checkpoint_path, manifest['flow_checkpoint_fingerprint'])
-        if not status.valid:
+        # reason이 None이면 checkpoint 파일이 아직 없는 것이다 — 추적은 끝났지만 Optical Flow가 첫
+        # 저장(멀티코어는 첫 구간 완료) 전에 끊긴 경우. 추적 결과는 멀쩡하므로 그대로 재사용하고
+        # Optical Flow만 처음부터 한다(여기서 실패시키면 25분짜리 추적을 버리게 된다).
+        # 파일이 있는데 손상·불일치인 경우만 실패로 남긴다.
+        if not status.valid and status.reason is not None:
             return None, f'RESUME_CHECKPOINT_INVALID ({status.reason})'
         return ResumePlan(out_dir, detections_csv, checkpoint_path,
                           float(manifest.get('tracking_seconds', 0.0)), dict(manifest.get('ai_settings') or {}),
