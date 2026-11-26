@@ -120,7 +120,8 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
               else if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
                 const ref=capacities[o.zone.id]||o.zone.capacity||Math.max(1,flowMax[o.zone.id]??1);const lv=congestionLevel(shownValue,ref);fill=lv.color;opacity=.45;
                 line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명 · ${lv.label}`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''} · ${lv.label}`;
-                line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}명/분${zf.belowZero?' · 시작 인원 부족':''}`;}
+                const ti=Math.max(0,Math.min(timeline.length-1,Math.floor(flowTime)));const cin=Math.round(timeline.inflow[o.zone.id]?.[ti]??0),cout=Math.round(timeline.outflow[o.zone.id]?.[ti]??0);
+                line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`누적 들어옴 ${cin} · 나감 ${cout} · 최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}/분${zf.belowZero?' · 시작 인원 부족':''}`;}
               else if(zoneCamera(o.zone.mapping?.job_id)&&!(o.zone.id in flowCfg.zones)){const zc=zoneCamera(o.zone.mapping?.job_id)!;const r=cameraRates(zc,flowTime);fill='#8b7ff0';opacity=.18;
                 line1=`${o.zone.name} (${zc.name})`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
               else{fill='#738398';opacity=.1;line2=pendingCamera&&!o.zone.mapping?`${pendingCamera.name} 분석 끝나면 연결`:'축제 흐름 계산 대상 아님';}

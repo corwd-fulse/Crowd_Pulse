@@ -21,6 +21,10 @@ describe('festival flow stock model', () => {
     expect(Array.from(tl.delta.top)).toEqual([-1, 1, 1, 1, 1]);
     expect(Array.from(tl.delta.bottom)).toEqual([1, -1, 2, 1, 1]);
     expect(tl.cameraActive.top).toBeNull();
+    expect(Array.from(tl.inflow.top)).toEqual([0, 2, 2, 2, 2]);
+    expect(Array.from(tl.outflow.top)).toEqual([1, 1, 1, 1, 1]);
+    expect(Array.from(tl.inflow.bottom)).toEqual([1, 1, 4, 4, 4]);
+    expect(Array.from(tl.outflow.bottom)).toEqual([0, 2, 2, 3, 3]);
   });
 
   it('uses the start count, clamps below zero with a flag, and extrapolates the recent rate', () => {

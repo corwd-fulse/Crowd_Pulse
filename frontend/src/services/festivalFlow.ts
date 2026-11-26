@@ -53,6 +53,8 @@ export async function getFestivalFlow(venueId: string, signal?: AbortSignal): Pr
 export interface FlowTimeline {
   length: number;                         // 통합 타임라인 길이(초)
   delta: Record<string, Float64Array>;   // 구역별 누적 순변화(시작 인원 제외), index = 통합 초
+  inflow: Record<string, Float64Array>;  // 구역별 누적 들어옴
+  outflow: Record<string, Float64Array>; // 구역별 누적 나감
   cameraActive: Record<string, [number, number] | null>; // 카메라별 [시작, 끝) 통합 초
 }
 
@@ -60,23 +62,24 @@ export interface FlowTimeline {
 export function buildTimeline(cfg: FestivalFlowConfig): FlowTimeline {
   const cams = cfg.cameras.filter((c) => c.gate);
   const length = Math.max(1, ...cams.map((c) => c.start_offset_s + c.gate!.seconds));
-  const delta: Record<string, Float64Array> = {};
+  const delta: Record<string, Float64Array> = {}, inflow: Record<string, Float64Array> = {}, outflow: Record<string, Float64Array> = {};
   for (const z of Object.keys(cfg.zones)) {
-    const step = new Float64Array(length);
+    const step = new Float64Array(length), inn = new Float64Array(length), out = new Float64Array(length);
     for (const c of cams) {
       const g = c.gate!, wp = c.plus[z] ?? 0, wm = c.minus[z] ?? 0;
       if (!wp && !wm) continue;
       for (let s = 0; s < g.seconds; s++) {
         const t = c.start_offset_s + s;
-        if (t >= 0 && t < length) step[t] += g.plus[s] * wp + g.minus[s] * wm;
+        if (t < 0 || t >= length) continue;
+        for (const v of [g.plus[s] * wp, g.minus[s] * wm]) { step[t] += v; if (v > 0) inn[t] += v; else out[t] -= v; }
       }
     }
-    for (let t = 1; t < length; t++) step[t] += step[t - 1];
-    delta[z] = step;
+    for (let t = 1; t < length; t++) { step[t] += step[t - 1]; inn[t] += inn[t - 1]; out[t] += out[t - 1]; }
+    delta[z] = step; inflow[z] = inn; outflow[z] = out;
   }
   const cameraActive: FlowTimeline['cameraActive'] = {};
   for (const c of cfg.cameras) cameraActive[c.id] = c.gate ? [c.start_offset_s, c.start_offset_s + c.gate.seconds] : null;
-  return {length, delta, cameraActive};
+  return {length, delta, inflow, outflow, cameraActive};
 }
 
 export interface ZoneFlow {raw: number; shown: number; belowZero: boolean; rate: number; predicted: number | null; change: number | null}
