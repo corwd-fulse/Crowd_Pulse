@@ -1,6 +1,6 @@
 """분석 job의 시계열 예측 결과(forecast/run_job_forecast.py 출력)를 대시보드용으로 읽는다.
 
-위치: uploads/results/<job_id>/forecast/<source>/ (source = yolo | dmcount, 구역 인원 출처)
+위치: uploads/results/<job_id>/forecast/<source>/ (source = yolo | dmcount | fused, 구역 인원 출처; fused = YOLO 인원 + 같은 10초 창의 DM-Count 잔여(YOLO 박스 밖))
   summary.json        모델별 backtest MAE·skill, 분 단위 예측 요약
   forecast_video.csv  10·30·60초 뒤 예측(backtest + 영상 끝 이후 forecast)
   anomaly_timeline.csv / anomaly_events.csv  이상 흐름 3단계
@@ -16,7 +16,7 @@ from uuid import UUID
 
 from app.services.vision_results import BASE_DIR
 
-SOURCES = ('yolo', 'dmcount')
+SOURCES = ('yolo', 'dmcount', 'fused')
 HORIZONS = (10, 30, 60)
 SERIES_MODELS = ('persistence', 'ridge_ar', 'lightgbm', 'lightgbm_pre')
 LEVEL_NAMES = {0: '낮음', 1: '주의', 2: '높음'}

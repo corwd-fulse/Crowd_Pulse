@@ -6,7 +6,7 @@ import {useVideoForecast} from '../../hooks/useVideoForecast';
 // 시계열 예측 탭: forecast/run_job_forecast.py 결과(10·30·60초 뒤 인원 예측 + 이상 흐름 3단계)를 보여준다.
 // 예측은 오프라인 산출물이라 job마다 따로 돌려야 하고, 안 돌렸으면 "결과 없음"으로 안내한다.
 
-const SOURCE_LABEL: Record<VideoForecastSource, string> = {yolo: 'YOLO+ByteTrack 인원', dmcount: 'DM-Count 인원'};
+const SOURCE_LABEL: Record<VideoForecastSource, string> = {yolo: 'YOLO+ByteTrack 인원', dmcount: 'DM-Count 인원', fused: 'YOLO + DM-Count(보완) 인원'};
 // 다크 표면(#0b2145) 기준 dataviz 검증 통과(명도 대역·CVD·대비). 실제값은 본문 잉크, 직전값은 회색 점선.
 const MODEL_STYLE: Record<VideoForecastModel, {label: string; color: string; dash?: string}> = {
   persistence: {label: '직전값(기준선)', color: 'var(--color-muted)', dash: '4 4'},
@@ -28,7 +28,7 @@ export default function VideoForecastPanel({jobId}: {jobId: string}) {
   return (
     <section aria-label="시계열 예측" className="space-y-5">
       <div className="flex flex-wrap items-center gap-4 rounded-lg border border-line bg-surface p-4 text-xs text-ink-soft">
-        <Segmented label="인원 출처" value={source} options={(['yolo', 'dmcount'] as const).map((value) => ({value, label: SOURCE_LABEL[value]}))} onChange={setSource} />
+        <Segmented label="인원 출처" value={source} options={(['yolo', 'dmcount', 'fused'] as const).map((value) => ({value, label: SOURCE_LABEL[value]}))} onChange={setSource} />
         <Segmented label="예측 시간" value={horizon} options={[10, 30, 60].map((value) => ({value, label: `${value}초 뒤`}))} onChange={setHorizon} />
       </div>
       {state.status === 'loading' ? <p role="status" className="rounded-lg border border-line bg-surface p-5 text-sm text-muted">시계열 예측 결과를 불러오는 중…</p>

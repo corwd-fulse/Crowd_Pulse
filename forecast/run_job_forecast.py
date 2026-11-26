@@ -9,6 +9,8 @@ python -m forecast.run_job_forecast <작업 폴더> [--source yolo dmcount] [--f
   <source>/input/     crowd_observations.csv, flow.csv, bottleneck_scores.csv, individual_directions.csv
 결과는 <source>/ 에 forecast_video.csv, anomaly_*.csv, forecast_minutes.csv, alarms_minutes.csv, summary.json 으로 남는다.
 source 이름은 인원 출처: yolo = YOLO+ByteTrack 구역 인원, dmcount = 같은 10초 창의 DM-Count 추정 인원(유입·유출은 트래커 값).
+fused = YOLO 인원 + 같은 10초 창의 DM-Count 잔여(YOLO 박스 밖 density, 대시보드 'YOLO + DM-Count(보완)'와 같은 값).
+--source fused 는 <work>/fused/input 을 직접 준비해야 해서 기본 실행 목록에는 넣지 않는다.
 """
 import argparse, json
 from pathlib import Path

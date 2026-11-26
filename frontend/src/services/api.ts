@@ -346,7 +346,7 @@ export async function getModelComparison(jobId: string, signal?: AbortSignal): P
   }
 }
 
-export type VideoForecastSource = 'yolo' | 'dmcount';
+export type VideoForecastSource = 'yolo' | 'dmcount' | 'fused';
 export type VideoForecastModel = 'persistence' | 'ridge_ar' | 'lightgbm' | 'lightgbm_pre';
 
 export interface VideoForecastPoint {
