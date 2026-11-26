@@ -1,4 +1,4 @@
-import {act, fireEvent, render, screen} from '@testing-library/react';
+import {act, fireEvent, render, screen, waitFor} from '@testing-library/react';
 import {afterEach, beforeEach, expect, it, vi} from 'vitest';
 import {useState} from 'react';
 import type {ReactElement} from 'react';
@@ -44,9 +44,11 @@ function Location() {return <output aria-label="현재 주소">{useLocation().se
 it('defaults to latest completion outside the recent list and persists it in the URL',async()=>{
   vi.mocked(getAnalysisJobs).mockResolvedValue([{...job,id:'new-queued',status:'queued'}]);
   render(<MemoryRouter initialEntries={['/dashboard?view=all']}><Dashboard/><Location/></MemoryRouter>);
-  await screen.findByText('테스트 분석 결과');
+  // 목록 -> 최근 완료 작업 -> 결과 번들, 비동기 3단계를 거친다. 전체 테스트를 병렬로 돌리면 기본 1초 대기를
+  // 넘길 때가 있어(단독 실행은 항상 통과) 이 테스트만 대기 시간을 늘리고, 주소 반영도 기다려서 확인한다.
+  await screen.findByText('테스트 분석 결과',undefined,{timeout:5000});
+  await waitFor(()=>expect(screen.getByLabelText('현재 주소').textContent).toContain(`job=${job.id}`),{timeout:5000});
   expect((screen.getByRole('combobox',{name:'조회 작업'}) as HTMLSelectElement).value).toBe(job.id);
-  expect(screen.getByLabelText('현재 주소').textContent).toContain(`job=${job.id}`);
   expect(screen.getByLabelText('현재 주소').textContent).toContain('view=all');
   expect(getLatestCompletedJob).toHaveBeenCalled();
 });
