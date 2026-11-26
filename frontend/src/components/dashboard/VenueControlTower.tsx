@@ -5,6 +5,8 @@ import axios from 'axios';
 import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
 import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
 import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
+import {buildTimeline,cameraRates,getFestivalFlow,zoneFlowAt} from '../../services/festivalFlow';
+import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
 import {center,emptyVenue,getVenue,getVenueHistory,getVenueRevision,observedRoutes,readFloorplan,removeVenueZone,saveVenue,value,zoneObservation} from '../../services/venueControl';
@@ -42,6 +44,18 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
     return ()=>c.abort();},[forecastKey,job,forecastH]);
   const forecastData=forecast?.key===forecastKey?forecast.data:null;
   const forecastLoading=!!forecastKey&&forecast?.key!==forecastKey;
+  // 축제 전체 흐름: 카메라 여러 대를 구역 사이의 문으로 묶어 구역 인원 = 시작 인원 + 유입 - 유출 (통합 타임라인, 자체 재생 시계)
+  const [flowMode,setFlowMode]=useState(false),[flowCfg,setFlowCfg]=useState<FestivalFlowConfig|null|undefined>(undefined);
+  const [flowTime,setFlowTime]=useState(0),[flowPlaying,setFlowPlaying]=useState(false),[flowSpeed,setFlowSpeed]=useState(10);
+  const [initials,setInitials]=useState<Record<string,number>>({});
+  useEffect(()=>{if(!flowMode||flowCfg!==undefined)return;const c=new AbortController();
+    getFestivalFlow(venueId,c.signal).then(r=>{if(!c.signal.aborted){setFlowCfg(r);if(r)setInitials(Object.fromEntries(Object.entries(r.zones).map(([k,v])=>[k,v.initial])));}});
+    return ()=>c.abort();},[flowMode,flowCfg,venueId]);
+  const timeline=useMemo(()=>flowCfg?buildTimeline(flowCfg):null,[flowCfg]);
+  useEffect(()=>{if(!flowPlaying||!timeline)return;const id=window.setInterval(()=>setFlowTime(t=>{const n=t+flowSpeed*.5;if(n>=timeline.length-1){setFlowPlaying(false);return timeline.length-1;}return n;}),500);return ()=>window.clearInterval(id);},[flowPlaying,flowSpeed,timeline]);
+  const flowMax=useMemo(()=>{if(!timeline)return {} as Record<string,number>;return Object.fromEntries(Object.entries(timeline.delta).map(([z,d])=>{let m=0;for(const v of d)m=Math.max(m,v);return [z,(initials[z]??0)+m];}));},[timeline,initials]);
+  const flowActive=flowMode&&!!flowCfg&&!!timeline;
+  const midCamera=flowCfg?.cameras.find(c=>c.axis==='x');
   const configRef=useRef(config);configRef.current=config;
   function edit(next:VenueConfiguration){setConfig(next);setDirty(true);}
   function patchZone(patch:Partial<VenueZone>){edit({...config,zones:config.zones.map(z=>z.id===selected?{...z,...patch}:z)});}
@@ -83,16 +97,36 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
           <defs><pattern id="venue-grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#213147" strokeWidth="1"/></pattern><marker id="venue-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="#6dc9d9"/></marker></defs>
           <rect width="1000" height="1000" fill="url(#venue-grid)"/><g transform={`translate(${pan.join(' ')}) scale(${zoom})`}>
           {config.image&&<image href={config.image} width="1000" height="1000" preserveAspectRatio="none"/>}
-          {observations.filter(o=>o.zone.visible).map(o=>{const p=center(o.zone.polygon);const f=forecastH?zoneForecasts.get(o.zone.id)??null:null;const fill=forecastH?(f?.color??'#738398'):o.color,opacity=forecastH?(f?.ratio!=null?.25+.5*f.ratio:.12):.22;
-            const line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${f?.predicted!=null?`${f.predicted.toFixed(1)}명`:'예측 없음'}`:`${o.zone.name} · ${value(o.count)}${o.count!==null?'명':''}`;
-            const line2=forecastH?(f?.predicted!=null&&o.count!==null?`현재 ${o.count}명 → ${f.predicted>=o.count?'▲':'▼'}${Math.abs(f.predicted-o.count).toFixed(1)}`:(f?.reason??'영상 ROI 연결 필요')):`유입 ${value(o.inflow)} / 유출 ${value(o.outflow)}`;
+          {observations.filter(o=>o.zone.visible).map(o=>{const p=center(o.zone.polygon);const f=forecastH?zoneForecasts.get(o.zone.id)??null:null;let fill=forecastH?(f?.color??'#738398'):o.color,opacity=forecastH?(f?.ratio!=null?.25+.5*f.ratio:.12):.22;
+            let line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${f?.predicted!=null?`${f.predicted.toFixed(1)}명`:'예측 없음'}`:`${o.zone.name} · ${value(o.count)}${o.count!==null?'명':''}`;
+            let line2=forecastH?(f?.predicted!=null&&o.count!==null?`현재 ${o.count}명 → ${f.predicted>=o.count?'▲':'▼'}${Math.abs(f.predicted-o.count).toFixed(1)}`:(f?.reason??'영상 ROI 연결 필요')):`유입 ${value(o.inflow)} / 유출 ${value(o.outflow)}`;
+            if(flowActive&&flowCfg&&timeline){
+              if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
+                const ref=o.zone.capacity??Math.max(1,flowMax[o.zone.id]??1);fill=heatColor(shownValue/ref);opacity=.3+.5*Math.min(1,shownValue/ref);
+                line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''}`;
+                line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}명/분${zf.belowZero?' · 시작 인원 부족':''}`;}
+              else if(midCamera&&o.zone.mapping?.job_id===midCamera.job_id){const r=cameraRates(midCamera,flowTime);fill='#8b7ff0';opacity=.18;
+                line1=`${o.zone.name} (가운데 카메라)`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
+              else{fill='#738398';opacity=.1;line2='축제 흐름 계산 대상 아님';}
+            }
             return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={fill} fillOpacity={opacity} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line1}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line2}</text></g>;})}
           {routes.filter(r=>r.from.visible&&r.to.visible&&(!routeFilter||routeFilter===JSON.stringify([r.from.id,r.to.id]))).map(r=>{const a=center(r.from.polygon),b=center(r.to.polygon),dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy)||1;const offset:Point=[-dy/len*25,dx/len*25];const start:Point=[a[0]+dx*.16+offset[0],a[1]+dy*.16+offset[1]],end:Point=[b[0]-dx*.16+offset[0],b[1]-dy*.16+offset[1]];return <g key={JSON.stringify([r.from.id,r.to.id])} onClick={()=>setRouteFilter(JSON.stringify([r.from.id,r.to.id]))}><path d={`M${start.join(',')} L${end.join(',')}`} stroke="#6dc9d9" strokeWidth={Math.min(10,1.5+Math.sqrt(r.count))} vectorEffect="non-scaling-stroke" markerEnd="url(#venue-arrow)"/><text transform={`translate(${(start[0]+end[0])/2} ${(start[1]+end[1])/2}) scale(1 ${config.width/config.height})`} x={0} y={-10} fill="#fff" fontSize="17" textAnchor="middle">{r.from.name} → {r.to.name} · {r.count}회</text></g>;})}
           <ConcentrationMapLayer config={config} result={multiResult}/>
           {config.markers.map(m=><g key={m.id}><circle cx={m.point[0]} cy={m.point[1]} r="9" fill={m.kind==='camera'?'#79a7ce':'#dfca85'}/><text x={m.point[0]+14} y={m.point[1]+6} fontSize="18" fill="#fff">{m.name}</text></g>)}
           {draft.length>0&&<polyline points={draft.map(p=>p.join(',')).join(' ')} fill="#4aa7bf30" stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke"/>}{draft.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="5" fill="#fff"/>)}</g>
         </svg>{!config.image&&<div className="venue-map-empty">행사장 평면도를 업로드하세요<span>PNG · JPG · SVG / 최대 5MiB</span></div>}</div>
-        <div className="venue-toolbar" role="radiogroup" aria-label="지도 표시"><span>지도 표시</span>{[0,...FORECAST_HORIZONS].map(h=><button key={h} type="button" role="radio" aria-checked={forecastH===h} aria-pressed={forecastH===h} onClick={()=>setForecastH(h)}>{h?`${h}초 뒤 예측`:'현재 관측'}</button>)}{forecastLoading&&<span>예측 불러오는 중…</span>}</div>
+        <div className="venue-toolbar" role="radiogroup" aria-label="지도 표시"><span>지도 표시</span>{[0,...FORECAST_HORIZONS].map(h=><button key={h} type="button" role="radio" aria-checked={forecastH===h} aria-pressed={forecastH===h} onClick={()=>setForecastH(h)}>{h?`${h}초 뒤 예측`:'현재 관측'}</button>)}{forecastLoading&&!flowMode&&<span>예측 불러오는 중…</span>}<button type="button" aria-pressed={flowMode} onClick={()=>{setFlowMode(!flowMode);setFlowPlaying(false);}}>{flowMode?'✓ ':''}축제 전체 흐름 (카메라 통합)</button></div>
+        {flowMode&&(flowCfg===undefined?<p className="venue-notice">축제 흐름 설정 불러오는 중…</p>:!flowCfg||!timeline?<p className="venue-notice">이 행사장에는 축제 전체 흐름 설정이 없습니다 (backend/configs/festival_flow.json).</p>:
+          <div className="venue-settings" aria-label="축제 전체 흐름">
+            <div className="venue-toolbar"><button type="button" onClick={()=>setFlowPlaying(!flowPlaying)}>{flowPlaying?'일시정지':'재생'}</button>
+              <label>속도 <select aria-label="흐름 재생 속도" value={flowSpeed} onChange={e=>setFlowSpeed(Number(e.target.value))}>{[1,10,30,60].map(n=><option key={n} value={n}>{n}배</option>)}</select></label>
+              <input aria-label="통합 타임라인" type="range" min={0} max={timeline.length-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>
+              <span>{Math.floor(flowTime/60)}:{String(Math.floor(flowTime%60)).padStart(2,'0')} / {Math.floor(timeline.length/60)}:{String(timeline.length%60).padStart(2,'0')}</span></div>
+            <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=><label key={z}>{config.zones.find(v=>v.id===z)?.name??z} 시작 인원 <input aria-label={`${z} 시작 인원`} type="number" min={0} max={100000} value={initials[z]??0} onChange={e=>setInitials({...initials,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:80}}/></label>)}</div>
+            <ul className="venue-actions">{flowCfg.cameras.map(c=>{const act=timeline.cameraActive[c.id];const r=cameraRates(c,flowTime);return <li key={c.id}><b>{c.name}</b> — {!c.job_id?'분석 결과 연결 전 (계산에서 제외)':!c.gate?'경계선 통과 수 미계산 (python -m app.gate_flow)':!act||flowTime<act[0]||flowTime>=act[1]?'이 시각 영상 없음':`최근 1분 ${c.axis==='x'?`왼쪽 ${r?.minus.toFixed(0)} · 오른쪽 ${r?.plus.toFixed(0)}`:`들어감 ${r?.minus.toFixed(0)} · 나옴 ${r?.plus.toFixed(0)}`}명/분`}<br/><small>{c.meaning}</small></li>;})}</ul>
+            <p className="venue-muted">{flowCfg.sync_note} 구역 인원 = 시작 인원 + 누적 유입 − 누적 유출. 카메라가 보지 못한 출입구와 추적이 끊긴 사람은 빠지므로 실제 이동의 하한입니다.
+              {forecastH?` ${forecastH}초 뒤 예측은 최근 1분 순유입 속도가 그대로 이어진다는 가정입니다.`:''} * 표시는 계산값이 0 아래로 내려간 것으로, 시작 인원이 실제보다 적을 수 있다는 뜻입니다.</p>
+          </div>)}
         {forecastH?<div className="venue-legend" aria-label="예측 히트맵 범례"><span style={{display:'inline-flex',alignItems:'center',gap:6}}>적음<i aria-hidden="true" style={{display:'inline-block',width:120,height:10,borderRadius:2,background:`linear-gradient(90deg,${heatColor(0)},${heatColor(.5)},${heatColor(1)})`}}/>많음</span><span>● 회색 = 예측 없음·ROI 미연결</span>
           <span>구역 단위 {forecastH}초 뒤 예측 인원(YOLO 기준, 10초 평균) · 색 기준: 수용 인원(설정 시) 또는 이 영상 그 구역 최대 관측 인원 · 실험적 지표, 사고 판정 아님{forecastKey&&!forecastLoading&&!forecastData?' · 이 작업은 시계열 예측 결과가 없습니다':''}</span></div>
         :<div className="venue-legend"><span style={{color:'#39b88b'}}>● 지표 낮음</span><span style={{color:'#eabf50'}}>● 주의</span><span style={{color:'#f97316'}}>● 높음</span><span>● 미관측·미분석</span><span>기존 병목 정책 기준 · 사고 판정 아님</span></div>}

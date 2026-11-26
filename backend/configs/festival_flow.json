@@ -1,0 +1,20 @@
+{
+  "venue_id": "main",
+  "name": "광화문광장 축제 전체 흐름 (축제 중)",
+  "sync_note": "축제 중 영상 3개(위 IMG_0494 · 가운데 mosaic-002 · 아래 mosaic-003)의 시작 시각을 맞춘 통합 타임라인입니다. 아래 카메라는 실제로 2~3시간 늦게 촬영되어 실제 동시 관측이 아닙니다(시나리오).",
+  "zones": {
+    "fest-top": {"initial": 35},
+    "fest-bottom": {"initial": 35}
+  },
+  "cameras": [
+    {"id": "cam-top", "name": "위 카메라 (IMG_0494)", "job_id": null, "axis": "y", "start_offset_s": 0,
+     "minus": {"fest-top": 1}, "plus": {"fest-top": -1},
+     "meaning": "카메라에서 멀어지는 방향 = 위 축제로 들어감, 카메라 쪽 = 위 축제에서 나옴"},
+    {"id": "cam-mid", "name": "가운데 카메라 (mosaic-002)", "job_id": "6b8a7896-f9a3-418d-a57c-c53471196152", "axis": "x", "start_offset_s": 0,
+     "minus": {"fest-bottom": 1, "fest-top": -1}, "plus": {"fest-top": 1, "fest-bottom": -1},
+     "meaning": "왼쪽으로 지나감 = 위 축제 -> 아래 축제, 오른쪽으로 지나감 = 아래 축제 -> 위 축제"},
+    {"id": "cam-bottom", "name": "아래 카메라 (mosaic-003)", "job_id": "4e24b783-6bfa-4617-bdf0-fa5cb4f52625", "axis": "y", "start_offset_s": 0,
+     "minus": {"fest-bottom": 1}, "plus": {"fest-bottom": -1},
+     "meaning": "카메라에서 멀어지는 방향 = 아래 축제로 들어감, 카메라 쪽 = 아래 축제에서 나옴"}
+  ]
+}
