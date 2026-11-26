@@ -61,9 +61,9 @@ function ResultView({data}: {data: VisionResultBundle}) {
       </div>
 
       <div role="tablist" aria-label="분석 결과 탭" className="flex gap-2 border-b border-line text-sm">
-        <button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`px-4 py-2 ${tab === 'overview' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>기본 결과</button>
+        <button type="button" role="tab" aria-selected={tab === 'overview'} onClick={() => setTab('overview')} className={`px-4 py-2 ${tab === 'overview' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>기본 결과 (현재 관측)</button>
         <button type="button" role="tab" aria-selected={tab === 'comparison'} onClick={() => setTab('comparison')} className={`px-4 py-2 ${tab === 'comparison' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>AI 모델 비교</button>
-        <button type="button" role="tab" aria-selected={tab === 'forecast'} onClick={() => setTab('forecast')} className={`px-4 py-2 ${tab === 'forecast' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>시계열 예측</button>
+        <button type="button" role="tab" aria-selected={tab === 'forecast'} onClick={() => setTab('forecast')} className={`px-4 py-2 ${tab === 'forecast' ? 'border-b-2 border-brand font-bold text-ink' : 'text-muted'}`}>시계열 예측 (실험적 전망)</button>
       </div>
 
       {tab === 'forecast' ? <VideoForecastPanel jobId={summary.analysis_job_id} /> : tab === 'comparison' ? <ModelComparisonPanel jobId={summary.analysis_job_id} videoId={summary.video_id} /> : <>

@@ -69,6 +69,14 @@ function ForecastView({data}: {data: VideoForecastResponse}) {
   });
 
   return <>
+    <div role="note" className="rounded-lg border border-warn/40 bg-surface p-4 text-xs leading-relaxed text-ink-soft">
+      <p className="font-bold text-ink">미래 전망 · 실험적 지표</p>
+      <p className="mt-1">이 탭은 영상 4개로 만든 예측 모델의 <b>미래 인원 전망</b>입니다. 지금 구역에 몇 명이 있는지(현재 관측)는 <b>기본 결과</b> 탭의 YOLO·ByteTrack 값을 기준으로 보세요.
+        아래 오차는 각 시점까지의 영상만으로 예측해 채점한 값이며, &lsquo;직전값보다 나쁨&rsquo; 표시가 있는 모델은 쓰지 않는 편이 낫습니다.
+        미리 학습 모델(LightGBM·LSTM)은 이 영상을 학습에 쓰지 않은 모델로 채점했습니다.</p>
+      <p className="mt-1 text-muted">저장 위치: {data.stored === 'db' ? 'DB(crowd_predictions)' : '결과 파일(DB 이관 전)'} · 인원 출처에 따라 결과가 다릅니다. DM-Count는 가까이 크게 찍힌 사람을 적게 세는 경향이 있습니다.</p>
+    </div>
+
     <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
       <Stat label={`${data.horizon_s}초 뒤 최저 오차 모델`} value={best ? MODEL_STYLE[best.model as VideoForecastModel].label : '—'} />
       <Stat label="평균 절대 오차 (MAE)" value={best ? `${best.mae.toFixed(2)}명` : '—'} />
@@ -115,7 +123,7 @@ function ForecastView({data}: {data: VideoForecastResponse}) {
               <td className="whitespace-nowrap px-4 py-2.5">{MODEL_STYLE[row.model as VideoForecastModel].label}{bestOfHorizon && <span className="ml-1.5 rounded-sm bg-ok-soft px-1.5 py-0.5 text-[10px] text-ok">최저</span>}</td>
               <td className="px-4 py-2.5">{row.mae.toFixed(3)}</td>
               <td className="px-4 py-2.5">{row.rmse.toFixed(3)}</td>
-              <td className={`px-4 py-2.5 ${row.skill > 0 ? 'text-ok' : ''}`}>{row.model === 'persistence' ? '기준' : pct(row.skill)}</td>
+              <td className={`whitespace-nowrap px-4 py-2.5 ${row.skill > 0 ? 'text-ok' : ''}`}>{row.model === 'persistence' ? '기준' : pct(row.skill)}{row.model !== 'persistence' && row.skill < 0 && <span className="ml-1.5 rounded-sm bg-danger/15 px-1.5 py-0.5 text-[10px] text-danger">직전값보다 나쁨</span>}</td>
               <td className="px-4 py-2.5">{row.n.toLocaleString('ko-KR')}</td>
             </tr>;
           }))}</tbody></table></div>
@@ -131,17 +139,24 @@ function ForecastView({data}: {data: VideoForecastResponse}) {
             <td className="whitespace-nowrap px-4 py-2.5">{event.duration_s ?? '—'}초</td>
             <td className="px-4 py-2.5">{event.reason || '—'}</td>
           </tr>)}</tbody></table></div>}
-        <p className="px-5 py-3 text-xs text-muted">병목 점수·규칙 경보(급증·정체)·Isolation Forest를 합친 참고 지표입니다. 사고나 위험을 확정하지 않습니다. Isolation Forest: {data.iforest ?? '—'}</p>
+        <p className="px-5 py-3 text-xs text-muted">병목 점수·규칙 경보(급증·정체)·Isolation Forest를 합친 참고 지표입니다. 사고나 위험을 확정하지 않습니다.
+          <b className="text-warn"> 경보 기준은 실제 사고·혼잡 정답 라벨로 검증되지 않았습니다</b>(경보 빈도를 1분 1건 이하로 맞춘 조정값). Isolation Forest: {data.iforest ?? '—'}</p>
       </div>
     </div>
 
     {data.minutes && <div className="overflow-hidden rounded-lg border border-line bg-surface">
-      <h3 className="px-5 py-4 text-sm font-bold text-ink">5·10·15분 뒤 예측 (시뮬레이션 학습 모델, 참고)</h3>
+      <h3 className="px-5 py-4 text-sm font-bold text-ink">5·10·15분 뒤 예측 (시뮬레이션 학습 모델, 실험적)
+        {(() => {
+          const rows = Object.values(data.minutes.backtest);
+          const worse = rows.filter((row) => row.MAE > row.MAE_persistence).length;
+          return rows.length > 0 && <span className={`ml-2 rounded-sm px-1.5 py-0.5 text-[11px] font-normal ${worse ? 'bg-danger/15 text-danger' : 'bg-ok-soft text-ok'}`}>직전값보다 나쁨 {worse}/{rows.length}</span>;
+        })()}</h3>
       <div className="overflow-x-auto"><table className="w-full text-left text-xs text-ink-soft"><thead className="bg-sunken text-muted"><tr>{['구역 / 예측 시간', 'MAE', '직전값 MAE', '모델 적용 비율', '비교 시점'].map((title) => <th key={title} scope="col" className="whitespace-nowrap px-4 py-3">{title}</th>)}</tr></thead>
         <tbody>{Object.entries(data.minutes.backtest).map(([key, row]) => <tr key={key} className="border-t border-line">
           <td className="px-4 py-2.5">{key}</td><td className="px-4 py-2.5">{row.MAE.toFixed(3)}</td><td className="px-4 py-2.5">{row.MAE_persistence.toFixed(3)}</td>
           <td className="px-4 py-2.5">{Math.round(row.model_share * 100)}%</td><td className="px-4 py-2.5">{row.n}</td></tr>)}</tbody></table></div>
-      <p className="px-5 py-3 text-xs text-muted">밀도 경보 {data.minutes.alarms}건 · 모델 {data.minutes.model_version}. 유입이 학습 범위보다 작은 시점은 직전값으로 대체되며(모델 적용 비율), 구역 면적·출구 방향은 가정값이라 밀도는 참고용입니다.</p>
+      <p className="px-5 py-3 text-xs text-muted">밀도 경보 {data.minutes.alarms}건 · 모델 {data.minutes.model_version}. 유입이 학습 범위보다 작은 시점은 직전값으로 대체됩니다(모델 적용 비율).
+        <b className="text-warn"> 구역 면적·출구 방향은 실측이 아닌 추정값</b>(화면 50px = 1m 가정, 출구 = 가장 많은 이동 방향)이라 추정 밀도·경보는 참고용입니다. 이 영상들만으로는 분 단위 패턴을 학습할 데이터가 부족합니다.</p>
     </div>}
   </>;
 }

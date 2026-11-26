@@ -365,6 +365,7 @@ export interface VideoForecastResponse {
   analysis_job_id: string;
   source: VideoForecastSource;
   sources: VideoForecastSource[];
+  stored?: 'db' | 'file'; // 결과를 DB(crowd_predictions)에서 읽었는지, 이관 전 파일에서 읽었는지
   horizon_s: number;
   horizons: number[];
   zones: string[];
