@@ -7,7 +7,7 @@ export const RATE_WINDOW_S = 60;
 export interface GateCounts {job_id: string; seconds: number; plus: number[]; minus: number[]; axis: 'x' | 'y'; line: number; plus_means: string; minus_means: string}
 export interface FlowCamera {id: string; name: string; job_id: string | null; axis: 'x' | 'y'; start_offset_s: number;
   plus: Record<string, number>; minus: Record<string, number>; meaning: string; gate: GateCounts | null}
-export interface FestivalFlowConfig {venue_id: string; name: string; sync_note: string; zones: Record<string, {initial: number}>; cameras: FlowCamera[]}
+export interface FestivalFlowConfig {venue_id: string; name: string; sync_note: string; initial_note?: string; zones: Record<string, {initial: number; basis?: string}>; cameras: FlowCamera[]}
 
 export async function getFestivalFlow(venueId: string, signal?: AbortSignal): Promise<FestivalFlowConfig | null> {
   try {
