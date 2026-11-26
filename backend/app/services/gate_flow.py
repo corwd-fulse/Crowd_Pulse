@@ -67,15 +67,42 @@ def roi_mid_line(roi_polygon: list, axis: str, size: tuple[int, int]) -> float:
     return float((p[:, k].min() + p[:, k].max()) / 2 / n)
 
 
-def compute_for_job_dir(out_dir: Path, axis: str, line: float | None = None) -> tuple[pd.DataFrame, dict]:
+def compute_for_job_dir(out_dir: Path, axis: str, line: float | None = None, whole_frame: bool = False) -> tuple[pd.DataFrame, dict]:
     """분석 출력 폴더(roi_snapshot.json, execution_metadata.json, tracker/video_detections.csv) -> 초별 통과 수."""
     out_dir = Path(out_dir)
     roi = json.loads((out_dir / 'roi_snapshot.json').read_text(encoding='utf-8'))
     size = tuple(roi['video_resolution'])
     fps = float(json.loads((out_dir / 'execution_metadata.json').read_text(encoding='utf-8'))['fps'])
     poly = roi['zones'][0]['polygon']
-    line = roi_mid_line(poly, axis, size) if line is None else line
-    counts = gate_counts(out_dir / 'tracker' / 'video_detections.csv', axis, line, size, fps, poly)
-    return counts, {'axis': axis, 'line': round(line, 4), 'fps': fps, 'roi': roi['zones'][0]['name'],
+    if line is None:
+        line = 0.5 if whole_frame else roi_mid_line(poly, axis, size)
+    counts = gate_counts(out_dir / 'tracker' / 'video_detections.csv', axis, line, size, fps, None if whole_frame else poly)
+    return counts, {'axis': axis, 'line': round(line, 4), 'fps': fps, 'roi': 'whole_frame' if whole_frame else roi['zones'][0]['name'],
                     'plus_means': 'right' if axis == 'x' else 'down (toward camera)',
                     'minus_means': 'left' if axis == 'x' else 'up (away from camera)'}
+
+
+def exit_sides(detections_csv: Path, line: float, size: tuple[int, int], fps: float, roi: list | None = None,
+               min_frames: int = 30) -> pd.DataFrame:
+    """출입구 카메라(axis y)에서 '나감'(카메라 쪽으로 경계선을 넘음)한 사람이 화면 어느 쪽으로 빠졌는지.
+    초별 [sec, left, center, right]. 마지막으로 보인 위치의 가로 1/3 구간으로 나눈다(화면 밖 목적지는 모름)."""
+    w, h = size
+    d = pd.read_csv(detections_csv, usecols=['frame', 'track_id', 'x1', 'y1', 'x2', 'y2']).dropna(subset=['track_id'])
+    n = int(d.frame.max() / fps) + 1 if len(d) else 0
+    d['track_id'] = d.track_id.astype(int)
+    d['fx'], d['fy'] = (d.x1 + d.x2) / 2 / w, d.y2 / h
+    if roi is not None:
+        from matplotlib.path import Path as MplPath
+        inside = MplPath(np.asarray(roi, float)).contains_points(np.column_stack([d.fx * w, d.fy * h]))
+        start = d[inside].groupby('track_id').fy.first()
+    else:
+        start = d.groupby('track_id').fy.first()
+    g = d.sort_values('frame').groupby('track_id').agg(f0=('frame', 'first'), f1=('frame', 'last'), y0=('fy', 'first'),
+                                                        y1=('fy', 'last'), x1=('fx', 'last'))
+    g = g[(g.f1 - g.f0 >= min_frames) & (g.y0 < line - MARGIN) & (g.y1 > line + MARGIN) & g.index.isin(start.index)]
+    side = np.where(g.x1 < 1 / 3, 'left', np.where(g.x1 > 2 / 3, 'right', 'center'))
+    ev = pd.DataFrame({'sec': (g.f1 / fps).astype(int).to_numpy(), 'side': side})
+    res = pd.DataFrame({'sec': range(n)})
+    for k in ('left', 'center', 'right'):
+        res[k] = res.sec.map(ev[ev.side == k].sec.value_counts()).fillna(0).astype(int)
+    return res

@@ -238,7 +238,8 @@ def festival_flow(venue_id: str):
     config = json.loads(config_path.read_text(encoding='utf-8'))
     if config.get('venue_id') != venue_id:
         raise HTTPException(404, 'Festival flow is not configured for this venue')
-    for camera in config['cameras']:
+    phase_cameras = [c for ph in config.get('phases', {}).values() for c in ph.get('cameras', [])]
+    for camera in config['cameras'] + phase_cameras:
         camera['gate'] = None
         job_id = camera.get('job_id')
         if job_id:

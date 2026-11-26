@@ -5,7 +5,7 @@ import axios from 'axios';
 import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
 import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
 import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
-import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,getFestivalFlow,startCounts,zoneFlowAt} from '../../services/festivalFlow';
+import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,EXIT_SIDES,exitShares,getFestivalFlow,startCounts,zoneFlowAt} from '../../services/festivalFlow';
 import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
@@ -15,6 +15,7 @@ import './venueControl.css';
 import ConcentrationPanel from './ConcentrationPanel';
 import VenueLinksEditor from './VenueLinksEditor';
 import ConcentrationMapLayer from './ConcentrationMapLayer';
+import FestivalPhasePanel from './FestivalPhasePanel';
 import type {ConcentrationResult} from '../../services/concentration';
 
 export default function VenueControlTower({job,video,venueId='main'}:{venueId?:string;job:AnalysisJobResponse|null;video?:RefObject<HTMLVideoElement|null>}){
@@ -49,6 +50,7 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
   const [flowCfg,setFlowCfg]=useState<FestivalFlowConfig|null|undefined>(undefined),[flowReload,setFlowReload]=useState(0);
   const [flowTime,setFlowTime]=useState(0),[flowPlaying,setFlowPlaying]=useState(false),[flowSpeed,setFlowSpeed]=useState(10);
   const [initials,setInitials]=useState<Record<string,number>>({});
+  const [phase,setPhase]=useState<'pre'|'during'|'post'>('during');  // 축제 전/중/후
   const [capacities,setCapacities]=useState<Record<string,number>>({});  // 혼잡 기준 인원(0/없음 = 지도 구역 수용 인원 -> 타임라인 최대)
   // 흐름 모드를 켤 때마다(또는 새로고침) 다시 받는다: 카메라가 새로 연결되면 페이지 새로고침 없이 반영
   useEffect(()=>{if(!flowMode)return;setFlowCfg(undefined);const c=new AbortController();
@@ -118,12 +120,18 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
             return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={fill} fillOpacity={opacity} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line1}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line2}</text></g>;})}
           {routes.filter(r=>r.from.visible&&r.to.visible&&(!routeFilter||routeFilter===JSON.stringify([r.from.id,r.to.id]))).map(r=>{const a=center(r.from.polygon),b=center(r.to.polygon),dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy)||1;const offset:Point=[-dy/len*25,dx/len*25];const start:Point=[a[0]+dx*.16+offset[0],a[1]+dy*.16+offset[1]],end:Point=[b[0]-dx*.16+offset[0],b[1]-dy*.16+offset[1]];return <g key={JSON.stringify([r.from.id,r.to.id])} onClick={()=>setRouteFilter(JSON.stringify([r.from.id,r.to.id]))}><path d={`M${start.join(',')} L${end.join(',')}`} stroke="#6dc9d9" strokeWidth={Math.min(10,1.5+Math.sqrt(r.count))} vectorEffect="non-scaling-stroke" markerEnd="url(#venue-arrow)"/><text transform={`translate(${(start[0]+end[0])/2} ${(start[1]+end[1])/2}) scale(1 ${config.width/config.height})`} x={0} y={-10} fill="#fff" fontSize="17" textAnchor="middle">{r.from.name} → {r.to.name} · {r.count}회</text></g>;})}
           <ConcentrationMapLayer config={config} result={multiResult}/>
+          {flowActive&&phase==='post'&&flowCfg?.phases?.post.cameras.map(pc=>{const zone=config.zones.find(z=>z.id===pc.exit_zone);const sh=exitShares(pc.gate);if(!zone||!sh)return null;
+            const bottom=zone.polygon.reduce((a,p)=>p[1]>a[1]?p:a,zone.polygon[0]);const cx=center(zone.polygon)[0],y=bottom[1]+10;const dirs={left:[-150,70],center:[0,110],right:[150,70]} as const;const labels=flowCfg.exit_labels??{left:'왼쪽',center:'정면',right:'오른쪽'};
+            return <g key={pc.id} aria-label="축제 후 유출 방향">{EXIT_SIDES.map(k=>{const [dx,dy]=dirs[k];const w=2+sh.shares[k]*22;return <g key={k}><path d={`M${cx},${y} L${cx+dx},${y+dy}`} stroke="#f59e0b" strokeWidth={w} strokeOpacity={.85} markerEnd="url(#venue-arrow)" vectorEffect="non-scaling-stroke"/>
+              <text transform={`translate(${cx+dx} ${y+dy+22}) scale(1 ${config.width/config.height})`} textAnchor="middle" fontSize="18" fill="#fff" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{labels[k]} {Math.round(sh.shares[k]*100)}%</text></g>;})}</g>;})}
           {config.markers.map(m=><g key={m.id}><circle cx={m.point[0]} cy={m.point[1]} r="9" fill={m.kind==='camera'?'#79a7ce':'#dfca85'}/><text x={m.point[0]+14} y={m.point[1]+6} fontSize="18" fill="#fff">{m.name}</text></g>)}
           {draft.length>0&&<polyline points={draft.map(p=>p.join(',')).join(' ')} fill="#4aa7bf30" stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke"/>}{draft.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="5" fill="#fff"/>)}</g>
         </svg>{!config.image&&<div className="venue-map-empty">행사장 평면도를 업로드하세요<span>PNG · JPG · SVG / 최대 5MiB</span></div>}</div>
         <div className="venue-toolbar" role="radiogroup" aria-label="지도 표시"><span>지도 표시</span>{[0,...FORECAST_HORIZONS].map(h=><button key={h} type="button" role="radio" aria-checked={forecastH===h} aria-pressed={forecastH===h} onClick={()=>setForecastH(h)}>{h?`${h}초 뒤 예측`:'현재 관측'}</button>)}{forecastLoading&&!flowMode&&<span>예측 불러오는 중…</span>}<button type="button" aria-pressed={flowMode} onClick={()=>{setFlowMode(!flowMode);setFlowPlaying(false);}}>{flowMode?'✓ ':''}축제 전체 흐름 (카메라 통합)</button></div>
         {flowMode&&(flowCfg===undefined?<p className="venue-notice">축제 흐름 설정 불러오는 중…</p>:!flowCfg||!timeline?<p className="venue-notice">이 행사장에는 축제 전체 흐름 설정이 없습니다 (backend/configs/festival_flow.json).</p>:
           <div className="venue-settings" aria-label="축제 전체 흐름">
+            <div className="venue-toolbar" role="radiogroup" aria-label="축제 단계"><span>축제 단계</span>{(['pre','during','post'] as const).map(k=><button key={k} type="button" role="radio" aria-checked={phase===k} aria-pressed={phase===k} onClick={()=>setPhase(k)}>{k==='pre'?'축제 전 (비교)':k==='during'?'축제 중 (카메라 통합)':'축제 후 (유출)'}</button>)}</div>
+            {phase!=='during'&&<FestivalPhasePanel cfg={flowCfg} timeline={timeline} initials={initials} phase={phase} zoneName={id=>config.zones.find(z=>z.id===id)?.name??id}/>}
             <div className="venue-toolbar"><button type="button" onClick={()=>setFlowPlaying(!flowPlaying)}>{flowPlaying?'일시정지':'재생'}</button>
               <label>속도 <select aria-label="흐름 재생 속도" value={flowSpeed} onChange={e=>setFlowSpeed(Number(e.target.value))}>{[1,10,30,60].map(n=><option key={n} value={n}>{n}배</option>)}</select></label>
               <input aria-label="통합 타임라인" type="range" min={0} max={timeline.length-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>

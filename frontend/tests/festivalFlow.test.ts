@@ -68,3 +68,26 @@ describe('automatic start counts', () => {
     expect(startCounts(c, buildTimeline(c)).bottom.count).toBe(35);
   });
 });
+
+import {averageRates, exitShares, minutesToEmpty} from '../src/services/festivalFlow';
+
+describe('festival phases', () => {
+  const g = {job_id: 'p', seconds: 120, plus: Array(120).fill(0).map((_, i) => (i % 2 ? 1 : 0)), minus: Array(120).fill(0).map((_, i) => (i % 4 ? 0 : 1)),
+    axis: 'y' as const, line: 0.8, plus_means: '', minus_means: '',
+    exit_sides: {left: [3, 2, 0], center: [1, 0, 0], right: [2, 2, 0]}};
+  it('averages crossings per minute over the whole video', () => {
+    expect(averageRates(g)).toEqual({plus: 30, minus: 15});
+    expect(averageRates(null)).toBeNull();
+  });
+  it('splits exits by screen side', () => {
+    const s = exitShares(g)!;
+    expect(s.total).toBe(10);
+    expect(s.counts).toEqual({left: 5, center: 1, right: 4});
+    expect(s.shares.left).toBeCloseTo(0.5);
+  });
+  it('time to empty only when people are actually leaving', () => {
+    expect(minutesToEmpty(300, 15)).toBe(20);
+    expect(minutesToEmpty(300, 0)).toBeNull();
+    expect(minutesToEmpty(300, -2)).toBeNull();
+  });
+});

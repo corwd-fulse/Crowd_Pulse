@@ -15,12 +15,18 @@ export function congestionLevel(count: number, reference: number) {
   return {ratio, ...CONGESTION_LEVELS.find((l) => ratio < l.max)!};
 }
 
-export interface GateCounts {job_id: string; seconds: number; plus: number[]; minus: number[]; axis: 'x' | 'y'; line: number; plus_means: string; minus_means: string}
+export interface GateCounts {job_id: string; seconds: number; plus: number[]; minus: number[]; axis: 'x' | 'y'; line: number; plus_means: string; minus_means: string;
+  exit_sides?: Record<ExitSide, number[]>}
+export type ExitSide = 'left' | 'center' | 'right';
+export const EXIT_SIDES: ExitSide[] = ['left', 'center', 'right'];
 export interface FlowCamera {id: string; name: string; job_id: string | null; axis: 'x' | 'y'; start_offset_s: number;
   plus: Record<string, number>; minus: Record<string, number>; meaning: string; gate: GateCounts | null}
 // initial = 기본 시작 인원. auto_min_margin 이 있으면 실제 시작 인원 = max(initial, 측정 흐름이 0 아래로 안 내려가는 최소값 + margin)
+export interface PhaseCamera {id: string; name: string; job_id: string; compare_to: string; axis: 'x' | 'y'; exit_zone?: string; gate: GateCounts | null}
+export interface FlowPhase {label: string; purpose: string; cameras: PhaseCamera[]}
 export interface FestivalFlowConfig {venue_id: string; name: string; sync_note: string; initial_note?: string;
-  zones: Record<string, {initial: number; auto_min_margin?: number; basis?: string}>; cameras: FlowCamera[]}
+  zones: Record<string, {initial: number; auto_min_margin?: number; basis?: string}>; cameras: FlowCamera[];
+  phases?: Record<'pre' | 'post', FlowPhase>; exit_labels?: Record<ExitSide, string>; exit_labels_note?: string}
 
 /** 구역별 실제 시작 인원과 그 근거(카메라가 추가되면 자동으로 다시 계산된다). */
 export function startCounts(cfg: FestivalFlowConfig, tl: FlowTimeline): Record<string, {count: number; minDelta: number; minAt: number; auto: boolean}> {
@@ -99,4 +105,26 @@ export function cameraRates(cam: FlowCamera, time: number): {plus: number; minus
   let p = 0, m = 0;
   for (let i = a; i <= s; i++) { p += g.plus[i]; m += g.minus[i]; }
   return {plus: p / n * 60, minus: m / n * 60};
+}
+
+
+/** 영상 전체 평균 통과 속도(명/분). plus/minus 의미는 카메라 축에 따른다(x: 오른쪽/왼쪽, y: 카메라 쪽=나감 / 멀어짐=들어감). */
+export function averageRates(g: GateCounts | null): {plus: number; minus: number} | null {
+  if (!g || !g.seconds) return null;
+  const sum = (a: number[]) => a.reduce((x, y) => x + y, 0);
+  return {plus: sum(g.plus) / g.seconds * 60, minus: sum(g.minus) / g.seconds * 60};
+}
+
+/** 나간 사람이 화면 어느 쪽으로 빠졌는지 수와 비율. */
+export function exitShares(g: GateCounts | null): {counts: Record<ExitSide, number>; shares: Record<ExitSide, number>; total: number} | null {
+  if (!g?.exit_sides) return null;
+  const counts = Object.fromEntries(EXIT_SIDES.map((k) => [k, g.exit_sides![k].reduce((x, y) => x + y, 0)])) as Record<ExitSide, number>;
+  const total = EXIT_SIDES.reduce((n, k) => n + counts[k], 0);
+  const shares = Object.fromEntries(EXIT_SIDES.map((k) => [k, total ? counts[k] / total : 0])) as Record<ExitSide, number>;
+  return {counts, shares, total};
+}
+
+/** 남은 인원이 지금 순유출 속도(명/분)로 다 빠지는 데 걸리는 분. 순유출이 0 이하면 null(줄지 않음). */
+export function minutesToEmpty(remaining: number, netOutPerMin: number): number | null {
+  return netOutPerMin > 0 ? remaining / netOutPerMin : null;
 }
