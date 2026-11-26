@@ -66,7 +66,9 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
   useEffect(()=>{setFlowTime(0);setFlowPlaying(false);},[phase]);
   const flowMax=useMemo(()=>{if(!timeline)return {} as Record<string,number>;return Object.fromEntries(Object.entries(timeline.delta).map(([z,d])=>{let m=0;for(const v of d)m=Math.max(m,v);return [z,(initials[z]??0)+m];}));},[timeline,initials]);
   const flowActive=flowMode&&!!flowCfg&&!!timeline;
-  const midCamera=flowCfg?.cameras.find(c=>c.axis==='x');
+  // 통로처럼 축제 구역이 아닌 지도 구역은, 그 구역에 연결된 영상과 같은 job의 카메라로 찾는다(축 방향으로 찾으면 위 카메라와 섞임)
+  const zoneCamera=(jobId?:string)=>jobId?flowCfg?.cameras.find(c=>c.job_id===jobId)??null:null;
+  const pendingCamera=flowCfg?.cameras.find(c=>!c.job_id)??null;
   const configRef=useRef(config);configRef.current=config;
   function edit(next:VenueConfiguration){setConfig(next);setDirty(true);}
   function patchZone(patch:Partial<VenueZone>){edit({...config,zones:config.zones.map(z=>z.id===selected?{...z,...patch}:z)});}
@@ -119,9 +121,9 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
                 const ref=capacities[o.zone.id]||o.zone.capacity||Math.max(1,flowMax[o.zone.id]??1);const lv=congestionLevel(shownValue,ref);fill=lv.color;opacity=.45;
                 line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명 · ${lv.label}`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''} · ${lv.label}`;
                 line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}명/분${zf.belowZero?' · 시작 인원 부족':''}`;}
-              else if(midCamera&&o.zone.mapping?.job_id===midCamera.job_id){const r=cameraRates(midCamera,flowTime);fill='#8b7ff0';opacity=.18;
-                line1=`${o.zone.name} (가운데 카메라)`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
-              else{fill='#738398';opacity=.1;line2=midCamera&&!midCamera.job_id&&!o.zone.mapping?'가운데 카메라 분석 끝나면 연결':'축제 흐름 계산 대상 아님';}
+              else if(zoneCamera(o.zone.mapping?.job_id)&&!(o.zone.id in flowCfg.zones)){const zc=zoneCamera(o.zone.mapping?.job_id)!;const r=cameraRates(zc,flowTime);fill='#8b7ff0';opacity=.18;
+                line1=`${o.zone.name} (${zc.name})`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
+              else{fill='#738398';opacity=.1;line2=pendingCamera&&!o.zone.mapping?`${pendingCamera.name} 분석 끝나면 연결`:'축제 흐름 계산 대상 아님';}
             }
             return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={fill} fillOpacity={opacity} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line1}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line2}</text></g>;})}
           {routes.filter(r=>r.from.visible&&r.to.visible&&(!routeFilter||routeFilter===JSON.stringify([r.from.id,r.to.id]))).map(r=>{const a=center(r.from.polygon),b=center(r.to.polygon),dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy)||1;const offset:Point=[-dy/len*25,dx/len*25];const start:Point=[a[0]+dx*.16+offset[0],a[1]+dy*.16+offset[1]],end:Point=[b[0]-dx*.16+offset[0],b[1]-dy*.16+offset[1]];return <g key={JSON.stringify([r.from.id,r.to.id])} onClick={()=>setRouteFilter(JSON.stringify([r.from.id,r.to.id]))}><path d={`M${start.join(',')} L${end.join(',')}`} stroke="#6dc9d9" strokeWidth={Math.min(10,1.5+Math.sqrt(r.count))} vectorEffect="non-scaling-stroke" markerEnd="url(#venue-arrow)"/><text transform={`translate(${(start[0]+end[0])/2} ${(start[1]+end[1])/2}) scale(1 ${config.width/config.height})`} x={0} y={-10} fill="#fff" fontSize="17" textAnchor="middle">{r.from.name} → {r.to.name} · {r.count}회</text></g>;})}
