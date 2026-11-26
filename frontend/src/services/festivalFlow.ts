@@ -18,7 +18,23 @@ export function congestionLevel(count: number, reference: number) {
 export interface GateCounts {job_id: string; seconds: number; plus: number[]; minus: number[]; axis: 'x' | 'y'; line: number; plus_means: string; minus_means: string}
 export interface FlowCamera {id: string; name: string; job_id: string | null; axis: 'x' | 'y'; start_offset_s: number;
   plus: Record<string, number>; minus: Record<string, number>; meaning: string; gate: GateCounts | null}
-export interface FestivalFlowConfig {venue_id: string; name: string; sync_note: string; initial_note?: string; zones: Record<string, {initial: number; basis?: string}>; cameras: FlowCamera[]}
+// initial = 기본 시작 인원. auto_min_margin 이 있으면 실제 시작 인원 = max(initial, 측정 흐름이 0 아래로 안 내려가는 최소값 + margin)
+export interface FestivalFlowConfig {venue_id: string; name: string; sync_note: string; initial_note?: string;
+  zones: Record<string, {initial: number; auto_min_margin?: number; basis?: string}>; cameras: FlowCamera[]}
+
+/** 구역별 실제 시작 인원과 그 근거(카메라가 추가되면 자동으로 다시 계산된다). */
+export function startCounts(cfg: FestivalFlowConfig, tl: FlowTimeline): Record<string, {count: number; minDelta: number; minAt: number; auto: boolean}> {
+  const out: Record<string, {count: number; minDelta: number; minAt: number; auto: boolean}> = {};
+  for (const [z, zc] of Object.entries(cfg.zones)) {
+    const d = tl.delta[z];
+    let minDelta = 0, minAt = 0;
+    if (d) for (let t = 0; t < d.length; t++) if (d[t] < minDelta) { minDelta = d[t]; minAt = t; }
+    const needed = Math.ceil(-minDelta) + (zc.auto_min_margin ?? 0);
+    const auto = zc.auto_min_margin !== undefined && needed > zc.initial;
+    out[z] = {count: auto ? needed : zc.initial, minDelta, minAt, auto};
+  }
+  return out;
+}
 
 export async function getFestivalFlow(venueId: string, signal?: AbortSignal): Promise<FestivalFlowConfig | null> {
   try {

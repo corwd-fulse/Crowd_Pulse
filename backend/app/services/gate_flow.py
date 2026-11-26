@@ -24,6 +24,8 @@ def gate_counts(detections_csv: Path, axis: str, line: float, size: tuple[int, i
     """초별 [sec, plus, minus]. line은 화면 비율(0~1). roi(다각형)를 주면 그 안의 발 위치만 쓴다."""
     d = pd.read_csv(detections_csv, usecols=['frame', 'track_id', 'x1', 'y1', 'x2', 'y2']).dropna(subset=['track_id'])
     d['track_id'] = d.track_id.astype(int)
+    # 타임라인 길이는 영상 전체 기준(ROI·경계선 필터 전). 필터 후 마지막 프레임으로 잡으면 끝이 잘린다.
+    n = int(d.frame.max() / fps) + 1 if len(d) else 0
     fx, fy = (d.x1 + d.x2) / 2, d.y2
     if roi is not None:
         from matplotlib.path import Path as MplPath
@@ -45,7 +47,6 @@ def gate_counts(detections_csv: Path, axis: str, line: float, size: tuple[int, i
                     rows.append((int(fi / fps), 'plus' if si > cur else 'minus'))
                 cur = si
     out = pd.DataFrame(rows, columns=['sec', 'dir'])
-    n = int(d.frame.max() / fps) + 1 if len(d) else 0
     res = pd.DataFrame({'sec': range(n)})
     for k in ('plus', 'minus'):
         res[k] = res.sec.map(out[out.dir == k].sec.value_counts()).fillna(0).astype(int)

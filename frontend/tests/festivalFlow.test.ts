@@ -52,3 +52,19 @@ describe('congestion levels', () => {
     expect(congestionLevel(10, 0).label).toBe('여유');
   });
 });
+
+import {startCounts} from '../src/services/festivalFlow';
+
+describe('automatic start counts', () => {
+  it('keeps the default when flows never go below it, raises it otherwise', () => {
+    const c = cfg();
+    c.zones = {top: {initial: 35, auto_min_margin: 10}, bottom: {initial: 0, auto_min_margin: 10}};
+    const s = startCounts(c, buildTimeline(c));
+    expect(s.top).toMatchObject({count: 35, auto: false, minDelta: -1});
+    expect(s.bottom).toMatchObject({count: 11, auto: true, minDelta: -1, minAt: 1});
+  });
+  it('without a margin the configured start is used as-is', () => {
+    const c = cfg();
+    expect(startCounts(c, buildTimeline(c)).bottom.count).toBe(35);
+  });
+});
