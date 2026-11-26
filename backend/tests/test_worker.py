@@ -524,3 +524,35 @@ def test_auto_forecast_failure_keeps_job_succeeded(worker, db, seeded):
     db.expire_all()
     assert db.get(AnalysisJob, seeded.id).status == 'succeeded'
     assert 'FORECAST_FAILED (RuntimeError): boom' in (Path(result['output_dir']) / 'worker.log').read_text(encoding='utf-8')
+
+
+# --- --video-wait-seconds: remote worker waits for the synced upload ------------------
+
+@pytest.mark.integration
+def test_waits_for_video_copied_after_claim(worker, db, seeded):
+    import threading
+    video = db.get(Video, seeded.video_id)
+    source = worker.base / video.storage_path
+    hidden = source.with_name(source.name + '.part')
+    source.rename(hidden)                      # sync 스크립트가 아직 복사 중인 상태
+    threading.Timer(0.5, hidden.rename, args=(source,)).start()
+    worker.video_wait_seconds = 10
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded', result
+
+
+@pytest.mark.integration
+def test_wait_gives_up_with_same_error(worker, db, seeded):
+    db.get(Video, seeded.video_id).storage_path = 'uploads/videos/missing.mp4'
+    db.flush()
+    worker.video_wait_seconds = 0.3
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'failed' and result['error'] == 'VIDEO_FILE_UNAVAILABLE'
+    worker.track.assert_not_called()
+
+
+def test_video_wait_seconds_validation():
+    with pytest.raises(ValueError):
+        Worker(Path('m.pt'), 'v', video_wait_seconds=-1)

@@ -111,7 +111,7 @@ class Worker:
                  dmcount_model_path=None, dmcount_gamma=1.0, dmcount_input_scale=1.0, dmcount_half=False,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
                  flow_method='full_frame', flow_workers=1, auto_forecast=False, forecast_python=None,
-                 forecast_runner=None):
+                 forecast_runner=None, video_wait_seconds=0.0):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
         self.base = Path(base_dir or storage.BASE_DIR).resolve()
@@ -131,6 +131,10 @@ class Worker:
         self.auto_forecast = auto_forecast
         self.forecast_python = forecast_python
         self.forecast_runner = forecast_runner
+        if not isinstance(video_wait_seconds, (int, float)) or video_wait_seconds < 0 or not math.isfinite(video_wait_seconds):
+            raise ValueError('video_wait_seconds must be a finite number >= 0')
+        # 0(기본) = 예전처럼 파일이 없으면 바로 VIDEO_FILE_UNAVAILABLE.
+        self.video_wait_seconds = float(video_wait_seconds)
         if type(imgsz) is not int or imgsz <= 0 or imgsz % 32:
             raise ValueError('imgsz must be a positive multiple of 32')
         self.imgsz = imgsz
@@ -437,6 +441,11 @@ class Worker:
         source = (self.base / claim.storage_path).resolve()
         if not source.is_relative_to((self.base/'uploads/videos').resolve()):
             raise InputFailure('VIDEO_PATH_NOT_ALLOWED')
+        # 원격 GPU worker는 업로드 영상을 sync 스크립트가 복사해 줄 때까지 못 본다(<파일>.part로 받아 검증 후
+        # 이름을 바꾸므로 보이는 순간 완전한 파일). 작업 생성 직후 가져가면 복사 전이라 실패하므로 잠깐 기다린다.
+        deadline = time.monotonic() + self.video_wait_seconds
+        while claim.video_status == 'uploaded' and not source.is_file() and time.monotonic() < deadline:
+            time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
         if claim.video_status != 'uploaded' or not source.is_file():
             raise InputFailure('VIDEO_FILE_UNAVAILABLE')
         try:
@@ -697,6 +706,9 @@ def main():
     parser.add_argument('--auto-forecast',action='store_true',
                         help='After a FULL job succeeds, run the time-series forecast (repo forecast/ package) and store it '
                              'in the DB; failures never change the job status')
+    parser.add_argument('--video-wait-seconds',type=float,default=0.0,
+                        help='Wait up to N seconds for the uploaded video file to appear (remote worker fed by '
+                             'sync_uploads_to_gpu.sh); default 0 = fail immediately as before')
     parser.add_argument('--forecast-python',default=None,
                         help='Python with forecast deps (lightgbm, torch, scikit-learn) for --auto-forecast; default: this interpreter')
     args=parser.parse_args()
@@ -736,7 +748,8 @@ def main():
                   frame_stride=args.frame_stride,flow_method=args.flow_method,flow_workers=args.flow_workers,
                   dmcount_model_path=args.dmcount_model_path,dmcount_gamma=args.dmcount_gamma,
                   dmcount_input_scale=args.dmcount_input_scale,dmcount_half=args.dmcount_fp16,
-                  auto_forecast=args.auto_forecast,forecast_python=args.forecast_python)
+                  auto_forecast=args.auto_forecast,forecast_python=args.forecast_python,
+                  video_wait_seconds=args.video_wait_seconds)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)
