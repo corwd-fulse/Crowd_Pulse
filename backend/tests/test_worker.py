@@ -478,3 +478,49 @@ def test_corrupted_checkpoint_after_crash_fails_with_clear_reason_not_silent_res
     assert 'WORKER_INTERRUPTED_NO_RESUME' in job_row.error_message
     assert 'RESUME_CHECKPOINT_INVALID' in job_row.error_message
     worker2.track.assert_not_called()  # 재개도, 새로 돌리는 것도 전혀 시도하지 않음
+
+
+# --- --auto-forecast (best-effort, never changes job status) ---------------------------
+
+def _full(db, seeded):
+    db.get(AnalysisJob, seeded.id).analysis_profile = 'full'
+    db.flush()
+
+
+@pytest.mark.integration
+def test_auto_forecast_off_by_default_never_runs(worker, db, seeded):
+    _full(db, seeded)
+    runner = Mock()
+    worker.forecast_runner = runner
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded' and 'forecast' not in result
+    runner.assert_not_called()
+
+
+@pytest.mark.integration
+def test_auto_forecast_reports_per_source_and_logs(worker, db, seeded):
+    _full(db, seeded)
+    worker.auto_forecast = True
+    worker.forecast_runner = Mock(return_value={'job_id': str(seeded.id), 'sources': {'yolo': {'points': 3}, 'dmcount': {'error': 'RuntimeError: x'}}})
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded'
+    assert result['forecast'] == {'yolo': 'ok', 'dmcount': 'failed'}
+    out = Path(result['output_dir'])
+    assert 'FORECAST {' in (out / 'worker.log').read_text(encoding='utf-8')
+    _, job_id, out_dir = worker.forecast_runner.call_args.args
+    assert job_id == seeded.id and Path(out_dir) == out
+
+
+@pytest.mark.integration
+def test_auto_forecast_failure_keeps_job_succeeded(worker, db, seeded):
+    _full(db, seeded)
+    worker.auto_forecast = True
+    worker.forecast_runner = Mock(side_effect=RuntimeError('boom'))
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded' and result['forecast'] == {'error': 'RuntimeError'}
+    db.expire_all()
+    assert db.get(AnalysisJob, seeded.id).status == 'succeeded'
+    assert 'FORECAST_FAILED (RuntimeError): boom' in (Path(result['output_dir']) / 'worker.log').read_text(encoding='utf-8')
