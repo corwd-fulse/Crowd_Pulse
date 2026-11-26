@@ -42,6 +42,31 @@ def test_model_comparison_joins_yolo_and_dmcount_by_window_and_zone(db, seeded, 
 
 
 @pytest.mark.integration
+def test_replacing_dmcount_adds_yolo_plus_dmcount_fused_count(db, seeded, client, bundle, tmp_path):
+    assert upload(client, seeded.id, bundle).status_code == 201
+    extended_storage.store_extended_result(db, seeded.id, _dmcount_paths(tmp_path))
+    url = f'/api/analysis/jobs/{seeded.id}/results/model-comparison'
+    item = client.get(url).json()['items'][0]
+    assert item['fused_count'] is None and item['dmcount_residual_count'] is None  # 예전 결과
+
+    rerun = tmp_path / 'rerun'
+    rerun.mkdir()
+    (rerun / 'window_0.png').write_bytes(b'\x89PNG\r\n\x1a\nnew')
+    csv_path = rerun / 'dmcount_estimates.csv'
+    csv_path.write_text('window_start,zone,estimated_count,inference_ms,model_version,density_map_path,'
+                        f'yolo_residual_count\n0,near,6.46,10.0,dmcount_qnrf,{rerun / "window_0.png"},0.75\n',
+                        encoding='utf-8')
+    extended_storage.replace_dmcount_estimates(db, seeded.id, csv_path)
+
+    item = client.get(url).json()['items'][0]
+    assert item['dmcount_residual_count'] == 0.75
+    assert item['fused_count'] == 3.55  # YOLO 윈도우 평균 2.8 + 박스 밖 잔여 0.75
+    assert client.get(item['density_map_path']).content == b'\x89PNG\r\n\x1a\nnew'
+    # 다른 확장 지표는 그대로 남는다.
+    assert client.get(f'/api/analysis/jobs/{seeded.id}/results/dmcount-estimates').status_code == 200
+
+
+@pytest.mark.integration
 def test_model_comparison_without_dmcount_is_404(db, seeded, client, bundle):
     assert upload(client, seeded.id, bundle).status_code == 201
     response = client.get(f'/api/analysis/jobs/{seeded.id}/results/model-comparison')
@@ -64,3 +89,37 @@ def test_density_map_for_other_job_is_404(db, seeded, client, bundle, tmp_path):
 
     response = client.get(f'/api/analysis/jobs/{uuid4()}/results/dmcount-estimates/density-map/window_0.png')
     assert response.status_code == 404
+
+
+INDIVIDUAL = 'frame,t_ms,track_id,speed_mps,reliable\n1,33,1,1.1,True\n2,66,1,1.0,True\n'
+
+
+@pytest.mark.integration
+def test_individual_speed_is_stored_as_file_and_downloadable(db, seeded, client, bundle, tmp_path):
+    assert upload(client, seeded.id, bundle).status_code == 201
+    paths = _extended_paths(tmp_path, {'crowd_speed_zone': 'sec,zone,speed_mps,low_confidence\n0,near,1.2,False\n',
+                                       'crowd_speed_individual': INDIVIDUAL})
+    stored = extended_storage.store_extended_result(db, seeded.id, paths, pixels_per_meter=50.0)
+    assert stored.crowd_speed_individual is None
+    assert stored.artifacts['crowd_speed_individual']['rows'] == 2
+
+    response = client.get(f'/api/analysis/jobs/{seeded.id}/results/extended-artifacts/crowd_speed_individual')
+    assert response.status_code == 200
+    assert response.text == INDIVIDUAL
+    assert client.get(f'/api/analysis/jobs/{seeded.id}/results/extended-artifacts/nope').status_code == 404
+
+
+@pytest.mark.integration
+def test_individual_speed_can_be_attached_later(db, seeded, client, bundle, tmp_path):
+    assert upload(client, seeded.id, bundle).status_code == 201
+    paths = _extended_paths(tmp_path, {'crowd_speed_zone': 'sec,zone,speed_mps,low_confidence\n0,near,1.2,False\n'})
+    extended_storage.store_extended_result(db, seeded.id, paths, pixels_per_meter=50.0)
+    url = f'/api/analysis/jobs/{seeded.id}/results/extended-artifacts/crowd_speed_individual'
+    assert client.get(url).status_code == 404
+
+    later = tmp_path / 'later.csv'
+    later.write_text(INDIVIDUAL, encoding='utf-8')
+    extended_storage.attach_file_only_artifact(db, seeded.id, 'crowd_speed_individual', later)
+    assert client.get(url).text == INDIVIDUAL
+    # 다른 지표는 그대로
+    assert client.get(f'/api/analysis/jobs/{seeded.id}/results/extended-artifacts/dwell_times').status_code == 200

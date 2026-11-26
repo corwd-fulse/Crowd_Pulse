@@ -2,8 +2,11 @@ import {useMediaWindow} from '../../hooks/useMediaWindow';
 import {useEffect,useMemo,useRef,useState} from 'react';
 import type {RefObject,PointerEvent as ReactPointerEvent} from 'react';
 import axios from 'axios';
-import {getReplay,getVisionResultBundle} from '../../services/api';
-import type {AnalysisJobResponse,ReplayResult,VisionResultBundle} from '../../services/api';
+import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
+import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
+import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
+import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,corridorFlows,cumulativeAt,EXIT_SIDES,exitShares,getFestivalFlow,isCorridorCamera,startCounts,zoneFlowAt} from '../../services/festivalFlow';
+import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
 import {center,emptyVenue,getVenue,getVenueHistory,getVenueRevision,observedRoutes,readFloorplan,removeVenueZone,saveVenue,value,zoneObservation} from '../../services/venueControl';
@@ -12,6 +15,7 @@ import './venueControl.css';
 import ConcentrationPanel from './ConcentrationPanel';
 import VenueLinksEditor from './VenueLinksEditor';
 import ConcentrationMapLayer from './ConcentrationMapLayer';
+import FestivalPhasePanel from './FestivalPhasePanel';
 import type {ConcentrationResult} from '../../services/concentration';
 
 export default function VenueControlTower({job,video,venueId='main'}:{venueId?:string;job:AnalysisJobResponse|null;video?:RefObject<HTMLVideoElement|null>}){
@@ -33,6 +37,38 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
     getVisionResultBundle(job.id,c.signal,{start_ms:Math.max(0,metricStart-60000),end_ms:metricStart+10000}).then(r=>{if(!c.signal.aborted)setBundle(r);}).catch(()=>{if(!c.signal.aborted)setDataError('분석 지표 조회 실패 — 병목·방향 미분석');});return()=>c.abort();
   },[job?.id,job?.status,job?.video_id,metricStart]);
   useEffect(()=>{const v=video?.current;if(!v)return;let id=0,stopped=false;const update=()=>setTime(v.currentTime);const tick:VideoFrameRequestCallback=(_,m)=>{if(stopped)return;setTime(m.mediaTime);id=v.requestVideoFrameCallback(tick);};if(v.requestVideoFrameCallback)id=v.requestVideoFrameCallback(tick);for(const e of ['timeupdate','seeked','loadedmetadata'])v.addEventListener(e,update);return()=>{stopped=true;if(id)v.cancelVideoFrameCallback(id);for(const e of ['timeupdate','seeked','loadedmetadata'])v.removeEventListener(e,update);};},[video]);
+  // 지도 표시: 0 = 현재 관측(기존), 10/30/60 = 그 초 뒤 구역 단위 예측 히트맵(시계열 예측, YOLO 인원 기준)
+  const [forecastH,setForecastH]=useState(0),[forecast,setForecast]=useState<{key:string;data:VideoForecastResponse|null}|null>(null);
+  const [flowMode,setFlowMode]=useState(false);
+  const forecastKey=job?.status==='succeeded'&&forecastH&&!flowMode?`${job.id}:${forecastH}`:'';  // 흐름 모드에서는 ROI 예측을 받지 않음
+  useEffect(()=>{if(!forecastKey||!job)return;const c=new AbortController();
+    getVideoForecast(job.id,'yolo',forecastH,c.signal).then(d=>{if(!c.signal.aborted)setForecast({key:forecastKey,data:d});}).catch(()=>{if(!c.signal.aborted)setForecast({key:forecastKey,data:null});});
+    return ()=>c.abort();},[forecastKey,job,forecastH]);
+  const forecastData=forecast?.key===forecastKey?forecast.data:null;
+  const forecastLoading=!!forecastKey&&forecast?.key!==forecastKey;
+  // 축제 전체 흐름: 카메라 여러 대를 구역 사이의 문으로 묶어 구역 인원 = 시작 인원 + 유입 - 유출 (통합 타임라인, 자체 재생 시계)
+  const [flowCfg,setFlowCfg]=useState<FestivalFlowConfig|null|undefined>(undefined),[flowReload,setFlowReload]=useState(0);
+  const [flowTime,setFlowTime]=useState(0),[flowPlaying,setFlowPlaying]=useState(false),[flowSpeed,setFlowSpeed]=useState(10);
+  const [initials,setInitials]=useState<Record<string,number>>({});
+  const [phase,setPhase]=useState<'pre'|'during'|'post'>('during');  // 축제 전/중/후
+  const [capacities,setCapacities]=useState<Record<string,number>>({});  // 혼잡 기준 인원(0/없음 = 지도 구역 수용 인원 -> 타임라인 최대)
+  // 흐름 모드를 켤 때마다(또는 새로고침) 다시 받는다: 카메라가 새로 연결되면 페이지 새로고침 없이 반영
+  useEffect(()=>{if(!flowMode)return;setFlowCfg(undefined);const c=new AbortController();
+    getFestivalFlow(venueId,c.signal).then(r=>{if(!c.signal.aborted)setFlowCfg(r);});
+    return ()=>c.abort();},[flowMode,venueId,flowReload]);
+  const timeline=useMemo(()=>flowCfg?buildTimeline(flowCfg):null,[flowCfg]);
+  const starts=useMemo(()=>flowCfg&&timeline?startCounts(flowCfg,timeline):null,[flowCfg,timeline]);
+  useEffect(()=>{if(starts)setInitials(Object.fromEntries(Object.entries(starts).map(([k,v])=>[k,v.count])));},[starts]);
+  const postCam=flowCfg?.phases?.post.cameras[0]??null;
+  const phaseLength=phase==='post'&&postCam?.gate?postCam.gate.seconds:timeline?.length??1;  // 축제 후 단계는 축제 후 영상 시각으로 재생
+  useEffect(()=>{if(!flowPlaying||!timeline)return;const id=window.setInterval(()=>setFlowTime(t=>Math.min(phaseLength-1,t+flowSpeed*.5)),500);return ()=>window.clearInterval(id);},[flowPlaying,flowSpeed,timeline,phaseLength]);
+  useEffect(()=>{if(flowPlaying&&timeline&&flowTime>=phaseLength-1)setFlowPlaying(false);},[flowPlaying,flowTime,timeline,phaseLength]);
+  useEffect(()=>{setFlowTime(0);setFlowPlaying(false);},[phase]);
+  const flowMax=useMemo(()=>{if(!timeline)return {} as Record<string,number>;return Object.fromEntries(Object.entries(timeline.delta).map(([z,d])=>{let m=0;for(const v of d)m=Math.max(m,v);return [z,(initials[z]??0)+m];}));},[timeline,initials]);
+  const flowActive=flowMode&&!!flowCfg&&!!timeline;
+  // 통로처럼 축제 구역이 아닌 지도 구역은, 그 구역에 연결된 영상과 같은 job의 카메라로 찾는다(축 방향으로 찾으면 위 카메라와 섞임)
+  const zoneCamera=(jobId?:string)=>jobId?flowCfg?.cameras.find(c=>c.job_id===jobId)??null:null;
+  const pendingCamera=flowCfg?.cameras.find(c=>!c.job_id)??null;
   const configRef=useRef(config);configRef.current=config;
   function edit(next:VenueConfiguration){setConfig(next);setDirty(true);}
   function patchZone(patch:Partial<VenueZone>){edit({...config,zones:config.zones.map(z=>z.id===selected?{...z,...patch}:z)});}
@@ -46,6 +82,7 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
       label:representative?.count!=null?'카메라 관측 · 혼잡 상세 아래':candidates.length>1?'복수 카메라 · 합산 안 함':'미관측',
       reason:representative?.reason??'카메라별 경계 통과·병목·신뢰도는 아래 중앙 집중 패널을 확인하세요.'};
   });
+  const zoneForecasts=new Map(observations.map(o=>[o.zone.id,forecastH&&job&&o.zone.mapping?.job_id===job.id?zoneForecast(forecastData,o.zone.mapping.roi_name,time,forecastH,o.zone.capacity):null]));
   const detail=observations.find(z=>z.zone.id===selected);
   const routes=observedRoutes(config.zones,job?.id,replay,time,windowSeconds);
   const duration=replay?replay.frame_count/replay.fps:0;
@@ -73,13 +110,68 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
           <defs><pattern id="venue-grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#213147" strokeWidth="1"/></pattern><marker id="venue-arrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0L7 3.5L0 7" fill="#6dc9d9"/></marker></defs>
           <rect width="1000" height="1000" fill="url(#venue-grid)"/><g transform={`translate(${pan.join(' ')}) scale(${zoom})`}>
           {config.image&&<image href={config.image} width="1000" height="1000" preserveAspectRatio="none"/>}
-          {observations.filter(o=>o.zone.visible).map(o=>{const p=center(o.zone.polygon);return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={o.color} fillOpacity={.22} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22">{o.zone.name} · {value(o.count)}{o.count!==null?'명':''}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16">유입 {value(o.inflow)} / 유출 {value(o.outflow)}</text></g>;})}
+          {observations.filter(o=>o.zone.visible).map(o=>{const p=center(o.zone.polygon);const f=forecastH?zoneForecasts.get(o.zone.id)??null:null;let fill=forecastH?(f?.color??'#738398'):o.color,opacity=forecastH?(f?.ratio!=null?.25+.5*f.ratio:.12):.22;
+            let line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${f?.predicted!=null?`${f.predicted.toFixed(1)}명`:'예측 없음'}`:`${o.zone.name} · ${value(o.count)}${o.count!==null?'명':''}`;
+            let line2=forecastH?(f?.predicted!=null&&o.count!==null?`현재 ${o.count}명 → ${f.predicted>=o.count?'▲':'▼'}${Math.abs(f.predicted-o.count).toFixed(1)}`:(f?.reason??'영상 ROI 연결 필요')):`유입 ${value(o.inflow)} / 유출 ${value(o.outflow)}`;
+            if(flowActive&&flowCfg&&timeline){
+              const postZone=phase==='post'&&postCam?.exit_zone===o.zone.id?cumulativeAt(postCam.gate,flowTime):null;
+              if(postZone){const endCount=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,timeline.length-1,0).shown;const left=Math.max(0,endCount-(postZone.exits-postZone.entries));
+                fill='#f59e0b';opacity=.35;line1=`${o.zone.name} · 축제 후 ${Math.floor(flowTime/60)}분: 빠져나감 ${postZone.exits}명`;line2=`들어옴 ${postZone.entries}명 · 남은 약 ${Math.round(left)}명`;}
+              else if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
+                const ref=capacities[o.zone.id]||o.zone.capacity||Math.max(1,flowMax[o.zone.id]??1);const lv=congestionLevel(shownValue,ref);fill=lv.color;opacity=.45;
+                line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명 · ${lv.label}`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''} · ${lv.label}`;
+                const ti=Math.max(0,Math.min(timeline.length-1,Math.floor(flowTime)));const cin=Math.round(timeline.inflow[o.zone.id]?.[ti]??0),cout=Math.round(timeline.outflow[o.zone.id]?.[ti]??0);
+                line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`누적 들어옴 ${cin} · 나감 ${cout} · 최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}/분${zf.belowZero?' · 시작 인원 부족':''}`;}
+              else if(zoneCamera(o.zone.mapping?.job_id)&&!(o.zone.id in flowCfg.zones)){const zc=zoneCamera(o.zone.mapping?.job_id)!;const r=cameraRates(zc,flowTime);fill='#8b7ff0';opacity=.18;
+                const zn=(id:string)=>config.zones.find(v=>v.id===id)?.name.replace(' 구역','')??id;const cf=corridorFlows(zc,flowTime);line1=`${o.zone.name} (${zc.name})`;
+                line2=!r?'이 시각 영상 없음':cf.map(f=>forecastH?`${zn(f.from)}→${zn(f.to)} ${forecastH}초 뒤 ${f.predicted[forecastH].toFixed(1)}명`:`${zn(f.from)}→${zn(f.to)} 누적 ${f.cumulative} · ${f.perMin.toFixed(0)}/분`).join('  |  ');}
+              else{fill='#738398';opacity=.1;line2=pendingCamera&&!o.zone.mapping?`${pendingCamera.name} 분석 끝나면 연결`:'축제 흐름 계산 대상 아님';}
+            }
+            return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={fill} fillOpacity={opacity} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line1}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line2}</text></g>;})}
           {routes.filter(r=>r.from.visible&&r.to.visible&&(!routeFilter||routeFilter===JSON.stringify([r.from.id,r.to.id]))).map(r=>{const a=center(r.from.polygon),b=center(r.to.polygon),dx=b[0]-a[0],dy=b[1]-a[1],len=Math.hypot(dx,dy)||1;const offset:Point=[-dy/len*25,dx/len*25];const start:Point=[a[0]+dx*.16+offset[0],a[1]+dy*.16+offset[1]],end:Point=[b[0]-dx*.16+offset[0],b[1]-dy*.16+offset[1]];return <g key={JSON.stringify([r.from.id,r.to.id])} onClick={()=>setRouteFilter(JSON.stringify([r.from.id,r.to.id]))}><path d={`M${start.join(',')} L${end.join(',')}`} stroke="#6dc9d9" strokeWidth={Math.min(10,1.5+Math.sqrt(r.count))} vectorEffect="non-scaling-stroke" markerEnd="url(#venue-arrow)"/><text transform={`translate(${(start[0]+end[0])/2} ${(start[1]+end[1])/2}) scale(1 ${config.width/config.height})`} x={0} y={-10} fill="#fff" fontSize="17" textAnchor="middle">{r.from.name} → {r.to.name} · {r.count}회</text></g>;})}
           <ConcentrationMapLayer config={config} result={multiResult}/>
+          {flowActive&&phase==='post'&&flowCfg?.phases?.post.cameras.map(pc=>{const zone=config.zones.find(z=>z.id===pc.exit_zone);const sh=exitShares(pc.gate);if(!zone||!sh)return null;
+            const bottom=zone.polygon.reduce((a,p)=>p[1]>a[1]?p:a,zone.polygon[0]);const cx=center(zone.polygon)[0],y=bottom[1]+10;const dirs={left:[-150,70],center:[0,110],right:[150,70]} as const;const labels=flowCfg.exit_labels??{left:'왼쪽',center:'정면',right:'오른쪽'};
+            return <g key={pc.id} aria-label="축제 후 유출 방향">{EXIT_SIDES.map(k=>{const [dx,dy]=dirs[k];const w=2+sh.shares[k]*22;return <g key={k}><path d={`M${cx},${y} L${cx+dx},${y+dy}`} stroke="#f59e0b" strokeWidth={w} strokeOpacity={.85} markerEnd="url(#venue-arrow)" vectorEffect="non-scaling-stroke"/>
+              <text transform={`translate(${cx+dx} ${y+dy+22}) scale(1 ${config.width/config.height})`} textAnchor="middle" fontSize="18" fill="#fff" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{labels[k]} {cumulativeAt(pc.gate,flowTime)?.sides?.[k]??0}명 ({Math.round(sh.shares[k]*100)}%)</text></g>;})}</g>;})}
           {config.markers.map(m=><g key={m.id}><circle cx={m.point[0]} cy={m.point[1]} r="9" fill={m.kind==='camera'?'#79a7ce':'#dfca85'}/><text x={m.point[0]+14} y={m.point[1]+6} fontSize="18" fill="#fff">{m.name}</text></g>)}
           {draft.length>0&&<polyline points={draft.map(p=>p.join(',')).join(' ')} fill="#4aa7bf30" stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke"/>}{draft.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="5" fill="#fff"/>)}</g>
         </svg>{!config.image&&<div className="venue-map-empty">행사장 평면도를 업로드하세요<span>PNG · JPG · SVG / 최대 5MiB</span></div>}</div>
-        <div className="venue-legend"><span style={{color:'#39b88b'}}>● 지표 낮음</span><span style={{color:'#eabf50'}}>● 주의</span><span style={{color:'#f97316'}}>● 높음</span><span>● 미관측·미분석</span><span>기존 병목 정책 기준 · 사고 판정 아님</span></div>
+        <div className="venue-toolbar" role="radiogroup" aria-label="지도 표시"><span>지도 표시</span>{[0,...FORECAST_HORIZONS].map(h=><button key={h} type="button" role="radio" aria-checked={forecastH===h} aria-pressed={forecastH===h} onClick={()=>setForecastH(h)}>{h?`${h}초 뒤 예측`:'현재 관측'}</button>)}{forecastLoading&&!flowMode&&<span>예측 불러오는 중…</span>}<button type="button" aria-pressed={flowMode} onClick={()=>{setFlowMode(!flowMode);setFlowPlaying(false);}}>{flowMode?'✓ ':''}축제 전체 흐름 (카메라 통합)</button></div>
+        {flowMode&&(flowCfg===undefined?<p className="venue-notice">축제 흐름 설정 불러오는 중…</p>:!flowCfg||!timeline?<p className="venue-notice">이 행사장에는 축제 전체 흐름 설정이 없습니다 (backend/configs/festival_flow.json).</p>:
+          <div className="venue-settings" aria-label="축제 전체 흐름">
+            <div className="venue-toolbar" role="radiogroup" aria-label="축제 단계"><span>축제 단계</span>{(['pre','during','post'] as const).map(k=><button key={k} type="button" role="radio" aria-checked={phase===k} aria-pressed={phase===k} onClick={()=>setPhase(k)}>{k==='pre'?'축제 전 (비교)':k==='during'?'축제 중 (카메라 통합)':'축제 후 (유출)'}</button>)}</div>
+            {phase!=='during'&&<FestivalPhasePanel cfg={flowCfg} timeline={timeline} initials={initials} phase={phase} time={flowTime} zoneName={id=>config.zones.find(z=>z.id===id)?.name??id}/>}
+            <div className="venue-toolbar"><button type="button" onClick={()=>setFlowPlaying(!flowPlaying)}>{flowPlaying?'일시정지':'재생'}</button>
+              <label>속도 <select aria-label="흐름 재생 속도" value={flowSpeed} onChange={e=>setFlowSpeed(Number(e.target.value))}>{[1,10,30,60].map(n=><option key={n} value={n}>{n}배</option>)}</select></label>
+              <input aria-label="통합 타임라인" type="range" min={0} max={phaseLength-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>
+              <span>{phase==='post'?'축제 후 영상 ':''}{Math.floor(flowTime/60)}:{String(Math.floor(flowTime%60)).padStart(2,'0')} / {Math.floor(phaseLength/60)}:{String(phaseLength%60).padStart(2,'0')}</span></div>
+            <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=><label key={z} title={flowCfg.zones[z].basis}>{config.zones.find(v=>v.id===z)?.name??z} 시작 인원 <input aria-label={`${z} 시작 인원`} type="number" min={0} max={100000} value={initials[z]??0} onChange={e=>setInitials({...initials,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:80}}/></label>)}</div>
+            <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=>{const zone=config.zones.find(v=>v.id===z);const fallback=zone?.capacity??Math.round(flowMax[z]??0);return <label key={z}>{zone?.name??z} 혼잡 기준 인원 <input aria-label={`${z} 혼잡 기준 인원`} type="number" min={0} max={1000000} placeholder={String(fallback)} value={capacities[z]||''} onChange={e=>setCapacities({...capacities,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:90}}/></label>;})}
+              <span className="venue-legend" style={{margin:0}}>{CONGESTION_LEVELS.map((l,i)=><span key={l.label} style={{color:l.color}}>● {l.label} {i===0?'50% 미만':i===1?'50~80%':'80% 이상'}</span>)}</span></div>
+            <p className="venue-muted">혼잡도 = 구역 인원 ÷ 혼잡 기준 인원. 비워 두면 지도 구역의 수용 인원, 그것도 없으면 이 타임라인의 최대 인원을 기준으로 씁니다(이 경우 &lsquo;위험&rsquo;은 영상 중 가장 붐빈 때와 비교한 상대값). 안전 기준으로 검증된 값이 아닙니다.</p>
+            <ul className="venue-actions">{starts&&Object.entries(starts).map(([z,s])=>{const name=config.zones.find(x=>x.id===z)?.name??z;const zc=flowCfg.zones[z];return <li key={z}>{name} 시작 인원 근거: 측정 흐름의 누적 순유입 최저 {Math.round(s.minDelta)}명({Math.floor(s.minAt/60)}:{String(s.minAt%60).padStart(2,'0')}){s.auto?` → 0명 아래로 내려가지 않는 최소값 ${Math.ceil(-s.minDelta)}명 + 여유 ${zc.auto_min_margin}명 = ${s.count}명`:` → 기본값 ${zc.initial}명으로 충분`}{zc.basis?` · ${zc.basis}`:''}</li>;})}</ul>
+            <div className="venue-toolbar"><button type="button" onClick={()=>setFlowReload(n=>n+1)}>카메라 데이터 새로고침</button></div>
+            {flowCfg.initial_note&&<p className="venue-muted">{flowCfg.initial_note}</p>}
+            {phase==='during'&&(()=>{const ti=Math.max(0,Math.min(timeline.length-1,Math.floor(flowTime)));const zs=Object.keys(flowCfg.zones);
+              const row=(z:string,t:number)=>({inn:Math.round(timeline.inflow[z]?.[t]??0),out:Math.round(timeline.outflow[z]?.[t]??0)});
+              const sum=(t:number)=>zs.reduce((a,z)=>{const r=row(z,t);return {inn:a.inn+r.inn,out:a.out+r.out};},{inn:0,out:0});
+              const now=sum(ti),all=sum(timeline.length-1);
+              return <table aria-label="두 축제 들어옴 나감" className="w-full text-left text-xs"><thead><tr><th>구역</th><th>지금까지 들어옴</th><th>지금까지 나감</th><th>영상 전체 들어옴 / 나감</th></tr></thead>
+                <tbody>{zs.map(z=>{const r=row(z,ti),a=row(z,timeline.length-1);return <tr key={z}><td>{config.zones.find(v=>v.id===z)?.name??z}</td><td>{r.inn}명</td><td>{r.out}명</td><td>{a.inn} / {a.out}명</td></tr>;})}
+                  <tr><td><b>두 축제 합계</b></td><td><b>{now.inn}명</b></td><td><b>{now.out}명</b></td><td>{all.inn} / {all.out}명</td></tr></tbody></table>;})()}
+            {phase==='during'&&flowCfg.cameras.filter(isCorridorCamera).map(c=>{const cf=corridorFlows(c,flowTime);const zn=(id:string)=>config.zones.find(v=>v.id===id)?.name??id;
+              return <table key={c.id} aria-label="두 축제 사이 이동" className="w-full text-left text-xs"><thead><tr><th>두 축제 사이 이동 ({c.name})</th><th>지금까지</th><th>최근 1분</th><th>10초 뒤</th><th>30초 뒤</th><th>60초 뒤</th></tr></thead>
+                <tbody>{cf.map(f=><tr key={f.from}><td>{zn(f.from)} → {zn(f.to)}</td><td>{f.cumulative}명</td><td>{f.perMin.toFixed(1)}명/분</td>{[10,30,60].map(h=><td key={h}>{f.predicted[h].toFixed(1)}명</td>)}</tr>)}
+                  {!cf.length||!cameraRates(c,flowTime)?<tr><td colSpan={6}>이 시각에는 통로 영상이 없습니다.</td></tr>:null}</tbody></table>;})}
+            <ul className="venue-actions">{flowCfg.cameras.map(c=>{const cum=cumulativeAt(c.gate,flowTime-c.start_offset_s);const act=timeline.cameraActive[c.id];const r=cameraRates(c,flowTime);return <li key={c.id}><b>{c.name}</b> — {!c.job_id?'분석 결과 연결 전 (계산에서 제외)':!c.gate?'경계선 통과 수 미계산 (python -m app.gate_flow)':!act||flowTime<act[0]||flowTime>=act[1]?'이 시각 영상 없음':`누적 ${c.axis==='x'?`왼쪽 ${cum?.entries??0} · 오른쪽 ${cum?.exits??0}`:`들어감 ${cum?.entries??0} · 나옴 ${cum?.exits??0}`}명 · 최근 1분 ${c.axis==='x'?`왼쪽 ${r?.minus.toFixed(0)} · 오른쪽 ${r?.plus.toFixed(0)}`:`들어감 ${r?.minus.toFixed(0)} · 나옴 ${r?.plus.toFixed(0)}`}명/분`}<br/><small>{c.meaning}</small></li>;})}</ul>
+            <p className="venue-muted">{flowCfg.sync_note} 구역 인원 = 시작 인원 + 누적 유입 − 누적 유출. 카메라가 보지 못한 출입구와 추적이 끊긴 사람은 빠지므로 실제 이동의 하한입니다.
+              {forecastH?` ${forecastH}초 뒤 예측은 최근 1분 순유입 속도가 그대로 이어진다는 가정입니다.`:''} * 표시는 계산값이 0 아래로 내려간 것으로, 시작 인원이 실제보다 적을 수 있다는 뜻입니다.</p>
+          </div>)}
+        {flowActive?<div className="venue-legend" aria-label="혼잡도 범례">{CONGESTION_LEVELS.map((l,i)=><span key={l.label} style={{color:l.color}}>● {l.label} ({i===0?'기준 인원 50% 미만':i===1?'50~80%':'80% 이상'})</span>)}<span>● 회색 = 흐름 계산 대상 아님</span><span>{forecastH?`${forecastH}초 뒤 예측(최근 1분 순유입 속도 유지 가정)`:'현재 구역 인원'} · 안전 기준으로 검증된 값 아님</span></div>
+        :forecastH?<div className="venue-legend" aria-label="예측 히트맵 범례"><span style={{display:'inline-flex',alignItems:'center',gap:6}}>적음<i aria-hidden="true" style={{display:'inline-block',width:120,height:10,borderRadius:2,background:`linear-gradient(90deg,${heatColor(0)},${heatColor(.5)},${heatColor(1)})`}}/>많음</span><span>● 회색 = 예측 없음·ROI 미연결</span>
+          <span>구역 단위 {forecastH}초 뒤 예측 인원(YOLO 기준, 10초 평균) · 색 기준: 수용 인원(설정 시) 또는 이 영상 그 구역 최대 관측 인원 · 실험적 지표, 사고 판정 아님{forecastKey&&!forecastLoading&&!forecastData?' · 이 작업은 시계열 예측 결과가 없습니다':''}</span></div>
+        :<div className="venue-legend"><span style={{color:'#39b88b'}}>● 지표 낮음</span><span style={{color:'#eabf50'}}>● 주의</span><span style={{color:'#f97316'}}>● 높음</span><span>● 미관측·미분석</span><span>기존 병목 정책 기준 · 사고 판정 아님</span></div>}
         <div className="venue-toolbar"><label>집계 구간 <select value={windowSeconds} onChange={e=>setWindowSeconds(Number(e.target.value))}>{[10,30,60].map(n=><option key={n} value={n}>최근 {n}초</option>)}</select></label><label>경로 <select aria-label="지도 경로 필터" value={routeFilter} onChange={e=>setRouteFilter(e.target.value)}><option value="">모든 경로</option>{routes.map(r=><option key={JSON.stringify([r.from.id,r.to.id])} value={JSON.stringify([r.from.id,r.to.id])}>{r.from.name} → {r.to.name} ({r.count}회)</option>)}</select></label><span>{time.toFixed(2)}초 / {duration.toFixed(2)}초</span><button disabled={!video?.current} onClick={()=>{const v=video?.current;if(v){if(v.paused)void v.play().catch(()=>setMessage('영상 재생 실패'));else v.pause();}}}>공통 재생 / 정지</button></div>
         <input aria-label="지도 공통 타임라인" type="range" min="0" max={Math.max(0,duration-(replay?1/replay.fps:0))} step={replay?1/replay.fps:.04} value={Math.min(time,duration)} disabled={!replay} onChange={e=>{const t=Number(e.target.value);if(video?.current)video.current.currentTime=t;setTime(t);}}/>
         <p className="venue-muted">화살표는 수동 매핑된 구역 간 확인된 전환 횟수이며 실제 보행 궤적이 아닙니다. 인원 위치는 지도에 투영하지 않습니다. 경로가 없으면 이동 미확인입니다.</p>

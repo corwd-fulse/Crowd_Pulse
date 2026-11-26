@@ -31,7 +31,13 @@ CSV_SCHEMAS = {
     'dmcount_estimates': ['window_start', 'zone', 'estimated_count', 'inference_ms', 'model_version', 'density_map_path'],
 }
 REQUIRED_KINDS = {'dwell_times', 'counter_flow', 'queue_scores', 'density_heatmap'}
+DMCOUNT_RESIDUAL_HEADER = [*CSV_SCHEMAS['dmcount_estimates'], 'yolo_residual_count']
 OPTIONAL_KINDS = {'crowd_speed_zone', 'crowd_speed_individual', 'dmcount_estimates'}
+# 행 단위 원본이라 긴 영상에서 수백만 행(59분 영상 240만 행, 70MB)이 되는 종류. DB JSON 칸 하나에
+# 넣으면 PostgreSQL jsonb 한도(약 256MB)와 확장 결과 조회 비용에 걸리므로, 검증만 스트리밍으로
+# 하고 CSV 파일로만 보관한다(manifest에 경로·sha256·행 수, DB 칸은 None).
+FILE_ONLY_KINDS = {'crowd_speed_individual'}
+MAX_FILE_ONLY_BYTES = 2 * 1024**3
 
 
 class InvalidExtendedResult(ValueError):
@@ -118,6 +124,9 @@ class DMCountEstimate(_Row):
     model_version: str = Field(min_length=1, max_length=100)
     # density_estimation.py가 heatmap_dir 없이 돌면 전부 빈 문자열(이미지 저장 안 함).
     density_map_path: Annotated[str, Field(max_length=500)] | None
+    # YOLO 박스 밖에 남은 density 합(YOLO+DM-Count 보완 추정용). 추적 결과 없이 돌린 예전
+    # 결과에는 열 자체가 없다(DMCOUNT_RESIDUAL_HEADER 참고).
+    yolo_residual_count: Nonnegative | None = None
 
     @field_validator('density_map_path', mode='before')
     @classmethod
@@ -154,13 +163,37 @@ def _read_csv_rows(path: Path, kind: str) -> list[dict]:
     try:
         with path.open(encoding='utf-8-sig', newline='') as stream:
             reader = csv.DictReader(stream)
-            if reader.fieldnames != CSV_SCHEMAS[kind]:
+            if reader.fieldnames != CSV_SCHEMAS[kind] and not (
+                    kind == 'dmcount_estimates' and reader.fieldnames == DMCOUNT_RESIDUAL_HEADER):
                 raise InvalidExtendedResult(f'{kind}: unexpected CSV header')
             for raw in reader:
-                rows.append(model.model_validate(raw).model_dump())
+                row = model.model_validate(raw).model_dump()
+                if kind == 'dmcount_estimates' and 'yolo_residual_count' not in raw:
+                    row.pop('yolo_residual_count')  # 예전 형식은 저장 모양도 예전 그대로
+                rows.append(row)
     except (ValidationError, ValueError, UnicodeError, csv.Error) as exc:
         raise InvalidExtendedResult(f'{kind}: invalid data ({type(exc).__name__})') from None
     return rows
+
+
+def count_valid_csv_rows(path: Path, kind: str) -> int:
+    """FILE_ONLY_KINDS용: 행을 메모리에 모으지 않고 한 줄씩 검증만 하고 행 수를 센다."""
+    if path.stat().st_size > MAX_FILE_ONLY_BYTES:
+        raise InvalidExtendedResult(f'{kind}: file exceeds 2GiB')
+    model, count = CSV_MODELS[kind], 0
+    try:
+        with path.open(encoding='utf-8-sig', newline='') as stream:
+            reader = csv.DictReader(stream)
+            if reader.fieldnames != CSV_SCHEMAS[kind]:
+                raise InvalidExtendedResult(f'{kind}: unexpected CSV header')
+            for raw in reader:
+                model.model_validate(raw)
+                count += 1
+    except (ValidationError, ValueError, UnicodeError, csv.Error) as exc:
+        if isinstance(exc, InvalidExtendedResult):
+            raise
+        raise InvalidExtendedResult(f'{kind}: invalid data ({type(exc).__name__})') from None
+    return count
 
 
 def validate_extended_bundle(paths: dict[str, Path]) -> tuple[dict[str, dict], dict[str, object]]:
@@ -186,6 +219,10 @@ def validate_extended_bundle(paths: dict[str, Path]) -> tuple[dict[str, dict], d
                 raise InvalidExtendedResult(f'tracking_quality: invalid data ({type(exc).__name__})') from None
             records[kind] = data
             manifest[kind] = {'sha256': digest, 'bytes': path.stat().st_size, 'rows': 1}
+        elif kind in FILE_ONLY_KINDS:
+            # records에는 넣지 않는다 — 파일로만 보관(manifest에 file_only 표시).
+            rows = count_valid_csv_rows(path, kind)
+            manifest[kind] = {'sha256': digest, 'bytes': path.stat().st_size, 'rows': rows, 'file_only': True}
         else:
             rows = _read_csv_rows(path, kind)
             records[kind] = rows

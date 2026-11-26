@@ -339,7 +339,9 @@ def run_video_forecast(source, out_dir=None, horizons=(10, 30, 60), models=MODEL
         rules = av.rule_events(ts, job_id=jb, base_time=btime)
         nwin = av.window_features(ts).groupby("zone").size()
         sc, ife = None, pd.DataFrame()
-        if ts.motion.notna().all() and (nwin >= MIN_IF_WINDOWS).all():
+        # Optical Flow는 첫 초(이전 프레임 없음)처럼 몇 초가 비어 있을 수 있다. window_features가 빈 칸을 버리므로 구역마다 motion이 있으면 된다.
+        has_motion = ts.groupby("zone").motion.apply(lambda s: s.notna().any()).all()
+        if has_motion and (nwin >= MIN_IF_WINDOWS).all():
             sc, feats = av.iforest_scores(ts)
             ife = av.iforest_events(ts, job_id=jb, base_time=btime)
             an_info["iforest"] = f"ok (특징 {feats})"

@@ -68,3 +68,32 @@ def test_speed_files_are_accepted_when_present(tmp_path):
     })
     manifest, records = validate_extended_bundle(paths)
     assert records['crowd_speed_zone'][0]['speed_mps'] == 1.2
+
+
+def test_individual_speed_is_validated_but_kept_file_only(tmp_path):
+    paths = _write(tmp_path, {
+        'crowd_speed_zone': 'sec,zone,speed_mps,low_confidence\n0,near,1.2,False\n',
+        'crowd_speed_individual': 'frame,t_ms,track_id,speed_mps,reliable\n1,33,1,1.1,True\n2,66,1,1.0,True\n',
+    })
+    manifest, records = validate_extended_bundle(paths)
+    assert 'crowd_speed_individual' not in records  # DB JSON 칸에 넣지 않는다
+    assert manifest['crowd_speed_individual']['rows'] == 2
+    assert manifest['crowd_speed_individual']['file_only'] is True
+
+
+def test_file_only_individual_speed_still_rejects_bad_rows(tmp_path):
+    paths = _write(tmp_path, {
+        'crowd_speed_individual': 'frame,t_ms,track_id,speed_mps,reliable\n1,33,1,-1,True\n',
+    })
+    with pytest.raises(InvalidExtendedResult):
+        validate_extended_bundle(paths)
+
+
+def test_file_only_individual_speed_is_not_limited_to_64mib(tmp_path, monkeypatch):
+    from app.services import vision_extended_csv
+    monkeypatch.setattr(vision_extended_csv, 'MAX_FILE_BYTES', 10)  # 일반 종류 상한을 아주 작게
+    paths = _write(tmp_path, {
+        'crowd_speed_individual': 'frame,t_ms,track_id,speed_mps,reliable\n1,33,1,1.1,True\n',
+    })
+    paths = {k: v for k, v in paths.items() if k in ('crowd_speed_individual',)}
+    assert vision_extended_csv.count_valid_csv_rows(paths['crowd_speed_individual'], 'crowd_speed_individual') == 1

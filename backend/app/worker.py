@@ -108,9 +108,10 @@ class Worker:
     def __init__(self, model_path: Path, algorithm_version: str, *, allow_test=False,
                  bind=engine, sessions=None, base_dir=None, track=None, pipeline=None,
                  extended_pipeline=None, pixels_per_meter=None, enable_extended=False, frame_stride=1,
-                 dmcount_model_path=None, dmcount_gamma=1.0, dmcount_input_scale=1.0,
+                 dmcount_model_path=None, dmcount_gamma=1.0, dmcount_input_scale=1.0, dmcount_half=False,
                  inspect_video=video_info, heartbeat_seconds=2.0, scope_ids=None, device='cpu', imgsz=1920,
-                 flow_method='full_frame'):
+                 flow_method='full_frame', flow_workers=1, auto_forecast=False, forecast_python=None,
+                 forecast_runner=None, video_wait_seconds=0.0):
         self.bind = bind
         self.sessions = sessions or sessionmaker(bind, expire_on_commit=False)
         self.base = Path(base_dir or storage.BASE_DIR).resolve()
@@ -121,6 +122,19 @@ class Worker:
         if flow_method == 'roi_crop_128' and (self.device == 'cpu' or not allow_test or not scope_ids):
             raise ValueError('ROI crop requires GPU, test permission and explicit job scope')
         self.flow_method = flow_method
+        if type(flow_workers) is not int or flow_workers < 1:
+            raise ValueError('flow_workers must be a positive int')
+        # Optical Flow 프로세스 수. 결과는 1과 같고 속도만 바뀐다(optical_flow.compute_zone_motion).
+        self.flow_workers = flow_workers
+        # Opt-in(--auto-forecast): job이 succeeded로 저장된 뒤 시계열 예측까지 돌려 DB에 넣는다.
+        # 확장 분석처럼 best-effort라 실패해도 job 상태는 그대로다. forecast_runner는 테스트 주입용.
+        self.auto_forecast = auto_forecast
+        self.forecast_python = forecast_python
+        self.forecast_runner = forecast_runner
+        if not isinstance(video_wait_seconds, (int, float)) or video_wait_seconds < 0 or not math.isfinite(video_wait_seconds):
+            raise ValueError('video_wait_seconds must be a finite number >= 0')
+        # 0(기본) = 예전처럼 파일이 없으면 바로 VIDEO_FILE_UNAVAILABLE.
+        self.video_wait_seconds = float(video_wait_seconds)
         if type(imgsz) is not int or imgsz <= 0 or imgsz % 32:
             raise ValueError('imgsz must be a positive multiple of 32')
         self.imgsz = imgsz
@@ -141,6 +155,7 @@ class Worker:
         self.dmcount_model_path = dmcount_model_path
         self.dmcount_gamma = dmcount_gamma
         self.dmcount_input_scale = dmcount_input_scale
+        self.dmcount_half = dmcount_half
         if type(frame_stride) is not int or frame_stride < 1:
             raise ValueError('frame_stride must be a positive int')
         self.frame_stride = frame_stride
@@ -245,10 +260,12 @@ class Worker:
             video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
             analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
             frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            flow_parallel=self.flow_workers > 1,
             device=self.device, code_hashes=code_hashes,
         )
         for field, value in current.items():
-            if manifest.get(field) != value:
+            # flow_parallel이 생기기 전에 쓴 manifest는 전부 단일 코어 실행이었다.
+            if manifest.get(field, False if field == 'flow_parallel' else None) != value:
                 return None, f'RESUME_FINGERPRINT_MISMATCH ({field})'
         out_dir, detections_csv = Path(manifest['out_dir']), Path(manifest['detections_csv'])
         if not out_dir.is_dir() or not detections_csv.is_file():
@@ -259,7 +276,11 @@ class Worker:
         checkpoint_path = Path(manifest['checkpoint_path'])
         from app.services.optical_flow import inspect_checkpoint
         status = inspect_checkpoint(checkpoint_path, manifest['flow_checkpoint_fingerprint'])
-        if not status.valid:
+        # reason이 None이면 checkpoint 파일이 아직 없는 것이다 — 추적은 끝났지만 Optical Flow가 첫
+        # 저장(멀티코어는 첫 구간 완료) 전에 끊긴 경우. 추적 결과는 멀쩡하므로 그대로 재사용하고
+        # Optical Flow만 처음부터 한다(여기서 실패시키면 25분짜리 추적을 버리게 된다).
+        # 파일이 있는데 손상·불일치인 경우만 실패로 남긴다.
+        if not status.valid and status.reason is not None:
             return None, f'RESUME_CHECKPOINT_INVALID ({status.reason})'
         return ResumePlan(out_dir, detections_csv, checkpoint_path,
                           float(manifest.get('tracking_seconds', 0.0)), dict(manifest.get('ai_settings') or {}),
@@ -272,6 +293,7 @@ class Worker:
             video_sha256=video_hash, roi_snapshot=claim.roi, algorithm_version=self.algorithm_version,
             analysis_mode=claim.analysis_mode, analysis_profile=claim.analysis_profile,
             frame_stride=self.frame_stride, flow_method=self.flow_method, imgsz=self.imgsz,
+            flow_parallel=self.flow_workers > 1,
             device=self.device, code_hashes=code_hashes,
             out_dir=str(out), detections_csv=str(detections), tracking_seconds=tracking_seconds,
             ai_settings=ai_settings,
@@ -419,6 +441,11 @@ class Worker:
         source = (self.base / claim.storage_path).resolve()
         if not source.is_relative_to((self.base/'uploads/videos').resolve()):
             raise InputFailure('VIDEO_PATH_NOT_ALLOWED')
+        # 원격 GPU worker는 업로드 영상을 sync 스크립트가 복사해 줄 때까지 못 본다(<파일>.part로 받아 검증 후
+        # 이름을 바꾸므로 보이는 순간 완전한 파일). 작업 생성 직후 가져가면 복사 전이라 실패하므로 잠깐 기다린다.
+        deadline = time.monotonic() + self.video_wait_seconds
+        while claim.video_status == 'uploaded' and not source.is_file() and time.monotonic() < deadline:
+            time.sleep(min(2.0, max(0.0, deadline - time.monotonic())))
         if claim.video_status != 'uploaded' or not source.is_file():
             raise InputFailure('VIDEO_FILE_UNAVAILABLE')
         try:
@@ -514,6 +541,8 @@ class Worker:
                         'checkpoint_path': str(root / 'flow_checkpoint.bin'),
                         'progress_callback': self.make_flow_progress_reporter(claim, root),
                     }
+                    if self.flow_workers > 1:
+                        full_kwargs['flow_workers'] = self.flow_workers
                 else:
                     pipeline = self.pipeline
                     full_kwargs = {}
@@ -524,7 +553,8 @@ class Worker:
                     # that is exactly the stage a crash/restart would interrupt.
                     from app.services.optical_flow import compute_checkpoint_fingerprint
                     flow_fp = compute_checkpoint_fingerprint(str(source), zones, info['fps'],
-                                                             self.frame_stride, self.flow_method)
+                                                             self.frame_stride, self.flow_method,
+                                                             parallel=self.flow_workers > 1)
                     self._write_resume_manifest(claim, root, out, detections, video_hash, code_hashes,
                                                 tracking_seconds, ai_settings, root/'flow_checkpoint.bin', flow_fp)
                 pipeline_args = (str(source),str(detections),zones,str(out/'pipeline'))
@@ -572,8 +602,15 @@ class Worker:
             if claim.analysis_profile == 'full' and self.enable_extended:
                 try:
                     if self.extended_pipeline is None:
+                        from functools import partial
                         from app.services.pipeline import run_extended_zone_pipeline
-                        extended = run_extended_zone_pipeline
+                        # resumable: leaves extended_progress.json + a per-window DM-Count
+                        # checkpoint in out/extended, so `python -m app.resume_extended <job>`
+                        # can finish this step later (even on another machine/GPU) if the
+                        # worker dies here. The job itself is already succeeded at this point,
+                        # so recover_interrupted() never picks this step back up on its own.
+                        extended = partial(run_extended_zone_pipeline, resumable=True,
+                                           dmcount_half=self.dmcount_half)
                     else:
                         extended = self.extended_pipeline
                     # Reuse what run_zone_pipeline() already computed instead of re-running
@@ -598,7 +635,25 @@ class Worker:
                 except Exception as exc:
                     with (out/'worker.log').open('a',encoding='utf-8') as log:
                         log.write(f'EXTENDED_PIPELINE_FAILED ({type(exc).__name__}): {exc}\n')
-            return {'job_id':str(claim.job_id),'status':'succeeded','analysis_profile':claim.analysis_profile,'output_dir':str(out)}
+            forecast_report=None
+            if claim.analysis_profile == 'full' and self.auto_forecast:
+                try:
+                    if self.forecast_runner is None:
+                        from app.services.job_forecast import run_for_job
+                        forecast_report=run_for_job(self.sessions,claim.job_id,out,python=self.forecast_python)
+                    else:
+                        forecast_report=self.forecast_runner(self.sessions,claim.job_id,out)
+                    with (out/'worker.log').open('a',encoding='utf-8') as log:
+                        log.write(f'FORECAST {json.dumps(forecast_report,ensure_ascii=False)}\n')
+                except Exception as exc:
+                    forecast_report={'error':type(exc).__name__}
+                    with (out/'worker.log').open('a',encoding='utf-8') as log:
+                        log.write(f'FORECAST_FAILED ({type(exc).__name__}): {exc}\n')
+            result={'job_id':str(claim.job_id),'status':'succeeded','analysis_profile':claim.analysis_profile,'output_dir':str(out)}
+            if forecast_report is not None:
+                sources=forecast_report.get('sources')
+                result['forecast']={s:('failed' if 'error' in r else 'ok') for s,r in sources.items()} if sources else forecast_report
+            return result
         except (Exception,KeyboardInterrupt) as exc:
             # Never put arbitrary exception strings/DB parameters in public state.
             if self.device != 'cpu' and is_cuda_oom(exc):
@@ -637,10 +692,25 @@ def main():
                         help='Run Optical Flow every N frames instead of every frame on long FULL videos (default 1: unchanged, every frame)')
     parser.add_argument('--dmcount-model-path',type=Path,default=None,
                         help='DM-Count pretrained checkpoint; omit (default) to skip this slow, accuracy-unverified reference metric entirely')
+    parser.add_argument('--flow-workers',type=int,default=1,
+                        help='Processes for Optical Flow (default 1: single core, unchanged). Results are the same; '
+                             'only speed changes. Keep it modest on shared servers.')
     parser.add_argument('--dmcount-gamma',type=float,default=1.0,
                         help='Gamma correction before DM-Count (>1 brightens dark frames; default 1.0 = off)')
     parser.add_argument('--dmcount-input-scale',type=float,default=1.0,
                         help='Resize factor for DM-Count input (>1 helps small, distant people; default 1.0)')
+    parser.add_argument('--dmcount-fp16',action='store_true',
+                        help='Run DM-Count in fp16 to roughly halve GPU memory on Volta+ GPUs (tensor cores); CUDA only, '
+                             'default fp32. Do NOT use on Pascal (GTX 10xx): measured on a GTX 1060 it was 3.7x slower '
+                             'and used MORE memory (3.4 vs 2.4 GiB at 2880x1620) — fp32 already fits there')
+    parser.add_argument('--auto-forecast',action='store_true',
+                        help='After a FULL job succeeds, run the time-series forecast (repo forecast/ package) and store it '
+                             'in the DB; failures never change the job status')
+    parser.add_argument('--video-wait-seconds',type=float,default=0.0,
+                        help='Wait up to N seconds for the uploaded video file to appear (remote worker fed by '
+                             'sync_uploads_to_gpu.sh); default 0 = fail immediately as before')
+    parser.add_argument('--forecast-python',default=None,
+                        help='Python with forecast deps (lightgbm, torch, scikit-learn) for --auto-forecast; default: this interpreter')
     args=parser.parse_args()
     if args.poll_seconds<=0 or not math.isfinite(args.poll_seconds):
         parser.error('poll-seconds must be positive and finite')
@@ -652,6 +722,8 @@ def main():
         parser.error('pixels-per-meter has no effect without --enable-extended-analysis')
     if args.frame_stride < 1:
         parser.error('frame-stride must be a positive int')
+    if args.flow_workers < 1:
+        parser.error('flow-workers must be a positive int')
     if not args.model_path.is_file() or args.model_path.stat().st_size == 0:
         parser.error('model-path must point to an existing local model; no automatic download')
     if args.dmcount_model_path is not None and not args.enable_extended_analysis:
@@ -662,6 +734,10 @@ def main():
         value=getattr(args,name)
         if not math.isfinite(value) or value<=0:
             parser.error(f'{name.replace("_","-")} must be positive and finite')
+    if args.dmcount_fp16 and (args.dmcount_model_path is None or args.device == 'cpu'):
+        parser.error('dmcount-fp16 requires --dmcount-model-path and a CUDA --device')
+    if args.forecast_python is not None and not args.auto_forecast:
+        parser.error('forecast-python has no effect without --auto-forecast')
     if args.job_id is not None and not args.once:
         parser.error('job-id requires --once')
     if args.flow_method == 'roi_crop_128' and (args.device == 'cpu' or not args.allow_test_analysis or args.job_id is None):
@@ -669,9 +745,11 @@ def main():
     worker=Worker(args.model_path,args.algorithm_version,allow_test=args.allow_test_analysis,
                   scope_ids=[args.job_id] if args.job_id is not None else None,device=args.device,imgsz=args.imgsz,
                   pixels_per_meter=args.pixels_per_meter,enable_extended=args.enable_extended_analysis,
-                  frame_stride=args.frame_stride,flow_method=args.flow_method,
+                  frame_stride=args.frame_stride,flow_method=args.flow_method,flow_workers=args.flow_workers,
                   dmcount_model_path=args.dmcount_model_path,dmcount_gamma=args.dmcount_gamma,
-                  dmcount_input_scale=args.dmcount_input_scale)
+                  dmcount_input_scale=args.dmcount_input_scale,dmcount_half=args.dmcount_fp16,
+                  auto_forecast=args.auto_forecast,forecast_python=args.forecast_python,
+                  video_wait_seconds=args.video_wait_seconds)
     def interrupt(signum,frame):
         raise WorkerInterrupted('WORKER_STOP_REQUESTED')
     signal.signal(signal.SIGTERM,interrupt)

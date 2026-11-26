@@ -13,8 +13,11 @@ import json
 import numpy as np, pandas as pd
 from sklearn.ensemble import IsolationForest
 
-GROWTH_THR, MOTION_DROP_THR, MIN_DURATION_S, LOOKBACK_S, MIN_INCREASE = 0.30, 0.50, 3, 5, 3.0  # 제안값: 샘플 검증 후 튜닝
+GROWTH_THR, MOTION_DROP_THR, MIN_DURATION_S, LOOKBACK_S, MIN_INCREASE = 0.30, 0.70, 3, 5, 3.0  # 제안값: 샘플 검증 후 튜닝
+# 2026-11-26 튜닝(영상 4개 x 인원 출처 3개): 정체 0.50/5초 기준/3초 -> 0.70/30초 기준/8초. 화면 경보 1분 1.81 -> 0.40건,
+# 주의 이상 시간 24% -> 10%, 큰 인원 증가(10초 평균 +2명 이상 상위 5개) 감지 98% -> 92%. 라벨이 없어 빈도 기준 튜닝이다.
 MIN_COUNT_STALL = 3.0  # 정체 경보는 구역에 이만큼 이상 있을 때만(빈 구역은 이동량 0이라 정체로 오인)
+STALL_BASELINE_S, STALL_MIN_DURATION_S = 30, 8  # 정체: 이동량을 직전 몇 초 평균과 비교할지, 몇 초 이어져야 경보인지
 WINDOW_S, CONTAMINATION, RANDOM_STATE = 10, 0.05, 0  # 명세서 제안: contamination 0.05
 IF_FEATURES = ["count_delta", "motion", "reverse_ratio", "dwell"]
 
@@ -39,19 +42,22 @@ def _events(mask, sec, min_len):
 
 
 def rule_events(ts, job_id="sample", base_time="2026-01-01 00:00:00+09:00", growth_thr=GROWTH_THR,
-                motion_drop_thr=MOTION_DROP_THR, min_duration_s=MIN_DURATION_S, lookback_s=LOOKBACK_S, min_increase=MIN_INCREASE, min_count_stall=MIN_COUNT_STALL) -> pd.DataFrame:
+                motion_drop_thr=MOTION_DROP_THR, min_duration_s=MIN_DURATION_S, lookback_s=LOOKBACK_S, min_increase=MIN_INCREASE, min_count_stall=MIN_COUNT_STALL,
+                stall_baseline_s=STALL_BASELINE_S, stall_min_duration_s=STALL_MIN_DURATION_S) -> pd.DataFrame:
     """FR-ANO-01: 인원 급증(최근 lookback초 전 대비 증가율 >= growth_thr) 또는 정체(이동량이 최근 평균 대비
     motion_drop_thr 이상 감소)가 min_duration_s초 이상 이어지면 이벤트. 과거 값만 쓴다(미래 미사용).
-    급증은 증가 인원이 min_increase명 이상일 때만 센다(2명 -> 5명처럼 인원이 적을 때 비율만 튀는 것을 막음)."""
+    급증은 증가 인원이 min_increase명 이상일 때만 센다(2명 -> 5명처럼 인원이 적을 때 비율만 튀는 것을 막음).
+    정체는 직전 stall_baseline_s초 평균 이동량과 비교하고 stall_min_duration_s초 이상 이어져야 센다
+    (기준 창이 짧으면 걷다 잠깐 멈추는 평범한 흔들림까지 정체로 잡힌다)."""
     rows = []
     for zone, g in ts.groupby("zone"):
         g = g.sort_values("sec"); sec, cnt, mot = g.sec.to_numpy(), g["count"].to_numpy(float), g.motion.to_numpy(float)
         prev = pd.Series(cnt).shift(lookback_s).to_numpy()
         growth = np.where(cnt - prev >= min_increase, (cnt - prev) / np.maximum(prev, 1.0), np.nan)
-        base_m = pd.Series(mot).shift(1).rolling(lookback_s, min_periods=lookback_s).mean().to_numpy()
+        base_m = pd.Series(mot).shift(1).rolling(stall_baseline_s, min_periods=stall_baseline_s).mean().to_numpy()
         drop = np.where(cnt >= min_count_stall, 1 - mot / np.where(base_m > 0, base_m, np.nan), np.nan)
-        for kind, val, thr in (("surge", growth, growth_thr), ("stall", drop, motion_drop_thr)):
-            for a, b in _events(np.nan_to_num(val, nan=-np.inf) >= thr, sec, min_duration_s):
+        for kind, val, thr, dur in (("surge", growth, growth_thr, min_duration_s), ("stall", drop, motion_drop_thr, stall_min_duration_s)):
+            for a, b in _events(np.nan_to_num(val, nan=-np.inf) >= thr, sec, dur):
                 peak = float(np.nanmax(val[a:b + 1]))
                 rows.append({"job_id": job_id, "zone_id": zone, "event_sec": int(sec[a]), "end_sec": int(sec[b]),
                              "score": round(min(1.0, peak / (2 * thr)), 3), "method": "rule",  # 임계값의 2배를 1.0으로

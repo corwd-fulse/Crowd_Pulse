@@ -1,0 +1,99 @@
+{
+  "venue_id": "main",
+  "name": "광화문광장 축제 전체 흐름 (축제 중)",
+  "sync_note": "축제 중 영상 3개(위 mosaic-002 · 가운데 IMG_0494 · 아래 mosaic-003)의 시작 시각을 맞춘 통합 타임라인입니다. 위·가운데는 같은 시간대(15시대), 아래 카메라는 2~3시간 늦게 촬영되어 실제 동시 관측이 아닙니다(시나리오).",
+  "zones": {
+    "fest-top": {
+      "initial": 35,
+      "auto_min_margin": 10
+    },
+    "fest-bottom": {
+      "initial": 35,
+      "auto_min_margin": 10
+    }
+  },
+  "cameras": [
+    {
+      "id": "cam-top",
+      "name": "위 카메라 (mosaic-002)",
+      "job_id": "6b8a7896-f9a3-418d-a57c-c53471196152",
+      "axis": "x",
+      "start_offset_s": 0,
+      "minus": {
+        "fest-top": -1
+      },
+      "plus": {
+        "fest-top": 1
+      },
+      "meaning": "축제 입구 = 화면 오른쪽 부스. 부스 경계를 오른쪽으로 넘음 = 위 축제로 들어감, 왼쪽으로 넘어 나옴 = 위 축제에서 나감. 광장을 옆으로 지나가기만 한 사람은 세지 않음",
+      "gate_line": "화면 전체, 오른쪽 부스 왼쪽 끝(가로 87%) 세로선"
+    },
+    {
+      "id": "cam-mid",
+      "name": "가운데 카메라 (IMG_0494)",
+      "job_id": "05b82864-d75f-4a9d-853f-dd85872bc341",
+      "axis": "x",
+      "start_offset_s": 0,
+      "minus": {
+        "fest-bottom": 1,
+        "fest-top": -1
+      },
+      "plus": {
+        "fest-top": 1,
+        "fest-bottom": -1
+      },
+      "meaning": "오른쪽(위로)으로 감 = 아래 축제에서 나와 위 축제로, 왼쪽(아래로)으로 감 = 위 축제에서 나와 아래 축제로"
+    },
+    {
+      "id": "cam-bottom",
+      "name": "아래 카메라 (mosaic-003)",
+      "job_id": "4e24b783-6bfa-4617-bdf0-fa5cb4f52625",
+      "axis": "y",
+      "start_offset_s": 0,
+      "minus": {
+        "fest-bottom": 1
+      },
+      "plus": {
+        "fest-bottom": -1
+      },
+      "meaning": "축제 입구 = 화면 위쪽. 입구선을 위로 넘음 = 아래 축제로 들어감, 아래로 넘어옴 = 아래 축제에서 나옴. 옆 통로를 지나가기만 한 사람은 세지 않음",
+      "gate_line": "축제 입구 = 화면 위쪽(ROI 윗변, 세로 65%) 가로선, 통로 폭(가로 8~68%) 안만"
+    }
+  ],
+  "initial_note": "시작 인원은 기본 35명(30~40명)이고, 카메라로 잰 누적 순유입이 그보다 더 내려가면 0명 아래로 내려가지 않는 최소값에 여유 10명을 더해 자동으로 올립니다. 실측이 아닌 하한 추정입니다.",
+  "phases": {
+    "pre": {
+      "label": "축제 전",
+      "purpose": "축제 전에는 사람이 거의 없다가 축제 중에 얼마나 많아졌는지 비교",
+      "cameras": [
+        {
+          "id": "cam-mid-pre",
+          "name": "가운데 카메라 (output_final, 축제 전)",
+          "job_id": "6af59b74-aa84-4816-9ddb-97158dfa4a0d",
+          "compare_to": "cam-mid",
+          "axis": "x"
+        }
+      ]
+    },
+    "post": {
+      "label": "축제 후",
+      "purpose": "축제가 끝난 뒤 사람들이 얼마나 빨리, 어느 쪽으로 빠져나가는지",
+      "cameras": [
+        {
+          "id": "cam-bottom-post",
+          "name": "아래 카메라 (mosaic-001, 축제 후)",
+          "job_id": "12e48aa3-8422-4ac5-ab5e-b5c4a0832d95",
+          "compare_to": "cam-bottom",
+          "axis": "y",
+          "exit_zone": "fest-bottom"
+        }
+      ]
+    }
+  },
+  "exit_labels": {
+    "left": "화면 왼쪽 방향",
+    "center": "정면(카메라 뒤쪽) 방향",
+    "right": "화면 오른쪽 방향"
+  },
+  "exit_labels_note": "방향은 카메라 화면 기준입니다. 화면 밖 실제 목적지(역·정류장 등)는 카메라가 보지 못합니다. 실제 지명은 exit_labels 에서 바꿀 수 있습니다."
+}

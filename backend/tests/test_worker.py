@@ -443,6 +443,25 @@ def test_resumed_success_stores_exactly_once_and_blocks_concurrent_worker(db,tmp
 
 
 @pytest.mark.integration
+def test_crash_before_first_flow_checkpoint_reuses_tracking(db,tmp_path,monkeypatch):
+    """추적은 끝났지만 Optical Flow가 첫 checkpoint를 쓰기 전에 죽으면(파일 없음), 실패시키지 않고
+    추적 결과를 재사용해 Optical Flow만 처음부터 다시 한다."""
+    crashed = _CrashedJob(db, tmp_path, monkeypatch)
+    crashed.checkpoint_path.unlink()
+
+    worker2 = crashed.make_worker()
+    with worker2.exclusive():
+        assert worker2.recover_interrupted()==1
+        db.expire_all()
+        assert db.get(AnalysisJob,crashed.job.id).status=='queued'
+        result=worker2.run_once()
+    assert result['status']=='succeeded',result
+    worker2.track.assert_not_called()
+    db.expire_all()
+    assert db.get(VisionResult,crashed.job.id) is not None
+
+
+@pytest.mark.integration
 def test_corrupted_checkpoint_after_crash_fails_with_clear_reason_not_silent_resume(db,tmp_path,monkeypatch):
     """checkpoint가 죽은 뒤 손상되면(디스크 오류 등) 임의로 재개하지 않고, 구체적인 사유와
     함께 failed로 마감한다 — WORKER_INTERRUPTED_NO_RESUME 안에 RESUME_CHECKPOINT_INVALID."""
@@ -459,3 +478,81 @@ def test_corrupted_checkpoint_after_crash_fails_with_clear_reason_not_silent_res
     assert 'WORKER_INTERRUPTED_NO_RESUME' in job_row.error_message
     assert 'RESUME_CHECKPOINT_INVALID' in job_row.error_message
     worker2.track.assert_not_called()  # 재개도, 새로 돌리는 것도 전혀 시도하지 않음
+
+
+# --- --auto-forecast (best-effort, never changes job status) ---------------------------
+
+def _full(db, seeded):
+    db.get(AnalysisJob, seeded.id).analysis_profile = 'full'
+    db.flush()
+
+
+@pytest.mark.integration
+def test_auto_forecast_off_by_default_never_runs(worker, db, seeded):
+    _full(db, seeded)
+    runner = Mock()
+    worker.forecast_runner = runner
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded' and 'forecast' not in result
+    runner.assert_not_called()
+
+
+@pytest.mark.integration
+def test_auto_forecast_reports_per_source_and_logs(worker, db, seeded):
+    _full(db, seeded)
+    worker.auto_forecast = True
+    worker.forecast_runner = Mock(return_value={'job_id': str(seeded.id), 'sources': {'yolo': {'points': 3}, 'dmcount': {'error': 'RuntimeError: x'}}})
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded'
+    assert result['forecast'] == {'yolo': 'ok', 'dmcount': 'failed'}
+    out = Path(result['output_dir'])
+    assert 'FORECAST {' in (out / 'worker.log').read_text(encoding='utf-8')
+    _, job_id, out_dir = worker.forecast_runner.call_args.args
+    assert job_id == seeded.id and Path(out_dir) == out
+
+
+@pytest.mark.integration
+def test_auto_forecast_failure_keeps_job_succeeded(worker, db, seeded):
+    _full(db, seeded)
+    worker.auto_forecast = True
+    worker.forecast_runner = Mock(side_effect=RuntimeError('boom'))
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded' and result['forecast'] == {'error': 'RuntimeError'}
+    db.expire_all()
+    assert db.get(AnalysisJob, seeded.id).status == 'succeeded'
+    assert 'FORECAST_FAILED (RuntimeError): boom' in (Path(result['output_dir']) / 'worker.log').read_text(encoding='utf-8')
+
+
+# --- --video-wait-seconds: remote worker waits for the synced upload ------------------
+
+@pytest.mark.integration
+def test_waits_for_video_copied_after_claim(worker, db, seeded):
+    import threading
+    video = db.get(Video, seeded.video_id)
+    source = worker.base / video.storage_path
+    hidden = source.with_name(source.name + '.part')
+    source.rename(hidden)                      # sync 스크립트가 아직 복사 중인 상태
+    threading.Timer(0.5, hidden.rename, args=(source,)).start()
+    worker.video_wait_seconds = 10
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'succeeded', result
+
+
+@pytest.mark.integration
+def test_wait_gives_up_with_same_error(worker, db, seeded):
+    db.get(Video, seeded.video_id).storage_path = 'uploads/videos/missing.mp4'
+    db.flush()
+    worker.video_wait_seconds = 0.3
+    with worker.exclusive():
+        result = worker.run_once()
+    assert result['status'] == 'failed' and result['error'] == 'VIDEO_FILE_UNAVAILABLE'
+    worker.track.assert_not_called()
+
+
+def test_video_wait_seconds_validation():
+    with pytest.raises(ValueError):
+        Worker(Path('m.pt'), 'v', video_wait_seconds=-1)

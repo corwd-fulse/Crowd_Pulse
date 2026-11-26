@@ -319,6 +319,9 @@ export interface ModelComparisonItem {
   window_start: number; // seconds, 10초 윈도우 (backend density_estimation.WINDOW_S와 동일)
   yolo_count: number | null; // 같은 윈도우에 YOLO 관측이 없으면 null(비교 시점 불일치)
   dmcount_estimated_count: number;
+  // YOLO 박스 밖에 남은 DM-Count density 합 / YOLO + 그 값(보완 추정). 박스 없이 돌린 예전 결과는 null.
+  dmcount_residual_count: number | null;
+  fused_count: number | null;
   dmcount_inference_ms: number;
   dmcount_model_version: string;
   density_map_path: string | null; // 상대 API 경로, 없으면 히트맵 미저장
@@ -338,6 +341,54 @@ export async function getModelComparison(jobId: string, signal?: AbortSignal): P
     )).data;
   } catch (error) {
     // DM-Count를 이 job에서 실행하지 않은 경우 서버가 404를 준다 — 에러가 아니라 "결과 없음"으로 구분.
+    if (axios.isAxiosError(error) && error.response?.status === 404) return null;
+    throw error;
+  }
+}
+
+export type VideoForecastSource = 'yolo' | 'dmcount' | 'fused';
+export type VideoForecastModel = 'persistence' | 'ridge_ar' | 'lightgbm' | 'lightgbm_pre' | 'lstm_pre';
+
+export interface VideoForecastPoint {
+  zone: string;
+  sec: number; // 예측 대상 시각(영상 초)
+  split: 'backtest' | 'forecast';
+  actual: number | null;
+  persistence?: number | null;
+  ridge_ar?: number | null;
+  lightgbm?: number | null;
+  lightgbm_pre?: number | null;
+  lstm_pre?: number | null;
+}
+
+export interface VideoForecastResponse {
+  analysis_job_id: string;
+  source: VideoForecastSource;
+  sources: VideoForecastSource[];
+  stored?: 'db' | 'file'; // 결과를 DB(crowd_predictions)에서 읽었는지, 이관 전 파일에서 읽었는지
+  horizon_s: number;
+  horizons: number[];
+  zones: string[];
+  seconds: number;
+  target: string;
+  models: VideoForecastModel[];
+  backtest: {horizon_s: number; model: string; mae: number; rmse: number; skill: number; n: number}[];
+  series: VideoForecastPoint[];
+  level_segments: {zone: string; start_sec: number; end_sec: number; level_num: number; level: string}[];
+  level_seconds: Record<string, Record<string, number>>;
+  level_events: {zone: string; start_sec: number; end_sec: number; peak_sec: number | null; level: string; duration_s: number | null; reason: string}[];
+  iforest: string | null;
+  minutes: {model_version: string | null; alarms: number; backtest: Record<string, {MAE: number; MAE_persistence: number; n: number; model_share: number}>; note: string | null} | null;
+  note: string;
+}
+
+export async function getVideoForecast(jobId: string, source: VideoForecastSource, horizon: number, signal?: AbortSignal): Promise<VideoForecastResponse | null> {
+  try {
+    return (await api.get<VideoForecastResponse>(
+      `/api/analysis/jobs/${encodeURIComponent(jobId)}/results/video-forecast`, {params: {source, horizon}, signal}
+    )).data;
+  } catch (error) {
+    // 이 job에 시계열 예측을 돌리지 않았으면 404 — 에러가 아니라 "결과 없음".
     if (axios.isAxiosError(error) && error.response?.status === 404) return null;
     throw error;
   }

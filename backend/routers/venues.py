@@ -222,3 +222,28 @@ def save(venue_id: str, payload: SaveRevision, db: Session = Depends(get_db)):
         db.rollback()
         raise HTTPException(503, 'Venue storage unavailable') from None
     return view(row)
+
+
+@router.get('/{venue_id}/festival-flow')
+def festival_flow(venue_id: str):
+    """축제 전체 흐름 지도: 카메라(게이트)별 방향·시간 오프셋 설정(configs/festival_flow.json)과
+    카메라별 경계선 통과 수(uploads/results/<job>/gate_flow.json, python -m app.gate_flow 로 생성)를 함께 준다.
+    구역 인원 = 시작 인원 + 누적 유입 - 누적 유출 계산과 10/30/60초 예측은 화면에서 한다."""
+    import json
+    from pathlib import Path
+    from app.services.vision_results import BASE_DIR
+    config_path = Path(__file__).resolve().parents[1] / 'configs' / 'festival_flow.json'
+    if not config_path.is_file():
+        raise HTTPException(404, 'Festival flow is not configured')
+    config = json.loads(config_path.read_text(encoding='utf-8'))
+    if config.get('venue_id') != venue_id:
+        raise HTTPException(404, 'Festival flow is not configured for this venue')
+    phase_cameras = [c for ph in config.get('phases', {}).values() for c in ph.get('cameras', [])]
+    for camera in config['cameras'] + phase_cameras:
+        camera['gate'] = None
+        job_id = camera.get('job_id')
+        if job_id:
+            gate = (BASE_DIR / 'uploads/results' / str(UUID(job_id)) / 'gate_flow.json')
+            if gate.is_file():
+                camera['gate'] = json.loads(gate.read_text(encoding='utf-8'))
+    return config
