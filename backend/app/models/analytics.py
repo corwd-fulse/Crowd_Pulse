@@ -137,6 +137,8 @@ class CrowdPrediction(Base):
         Index("ix_crowd_predictions_predicted_at", "predicted_at"),
         Index("ix_crowd_predictions_job_target", "analysis_job_id", "region_key", "target_offset_ms"),
         Index("ix_crowd_predictions_job_time", "analysis_job_id", "predicted_at"),
+        CheckConstraint("split IS NULL OR split IN ('backtest', 'forecast')", name="ck_crowd_predictions_split"),
+        Index("ix_crowd_predictions_job_source_series", "analysis_job_id", "count_source", "horizon_s", "region_key", "target_offset_ms"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -147,9 +149,37 @@ class CrowdPrediction(Base):
     target_offset_ms: Mapped[int] = mapped_column(BigInteger)
     target_captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), comment="Capture time corresponding to target offset, only when known")
     predicted_person_count: Mapped[int] = mapped_column(Integer)
-    predicted_congestion_percent: Mapped[Decimal] = mapped_column(Numeric(5, 2))
+    predicted_congestion_percent: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), comment="NULL when ROI area is only assumed (video forecasts)")
     confidence: Mapped[float | None] = mapped_column(Float)
     model_version: Mapped[str] = mapped_column(String(100))
+    # 영상 ROI 시계열 예측(forecast/run_job_forecast.py) 전용 칸. 다른 예측에는 NULL.
+    count_source: Mapped[str | None] = mapped_column(String(20), comment="Video forecast count source: yolo | dmcount | fused")
+    model_name: Mapped[str | None] = mapped_column(String(50))
+    horizon_s: Mapped[int | None] = mapped_column(Integer)
+    split: Mapped[str | None] = mapped_column(String(10), comment="backtest (actual known) | forecast (after video end)")
+    predicted_value: Mapped[float | None] = mapped_column(Float, comment="Exact predicted count (predicted_person_count is its rounded integer)")
+    actual_count: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str | None] = mapped_column(String(40))
+
+
+class VideoForecastRun(Base):
+    """영상 job 하나 x 인원 출처 하나의 시계열 예측 실행 결과(요약·경보 단계). 예측 점은 crowd_predictions에 있다."""
+    __tablename__ = "video_forecast_runs"
+    __table_args__ = (
+        CheckConstraint("count_source IN ('yolo', 'dmcount', 'fused')", name="ck_video_forecast_runs_source"),
+        UniqueConstraint("analysis_job_id", "count_source", name="uq_video_forecast_runs_job_source"),
+    )
+
+    id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
+    analysis_job_id: Mapped[UUID] = mapped_column(ForeignKey("analysis_jobs.id", ondelete="RESTRICT"))
+    count_source: Mapped[str] = mapped_column(String(20))
+    predicted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), comment="Same value as the crowd_predictions rows of this run")
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    summary: Mapped[dict] = mapped_column(JSONB)
+    level_segments: Mapped[list] = mapped_column(JSONB)
+    level_events: Mapped[list] = mapped_column(JSONB)
+    provenance: Mapped[dict | None] = mapped_column(JSONB, comment="Where the run came from (result folder, pretrained model dir/version)")
+    point_count: Mapped[int] = mapped_column(Integer)
 
 
 class BottleneckEvent(Base):

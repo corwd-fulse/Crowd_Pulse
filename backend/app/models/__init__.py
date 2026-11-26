@@ -7,12 +7,12 @@ from app.models.vision import VisionResult, VisionZoneMetric, VisionBottleneckSc
 from app.models.vision_extended import VisionExtendedResult
 from app.models.camera import Camera
 from app.models.analytics import (
-    AnalysisJob, BottleneckEvent, CrowdMetric, CrowdPrediction, Video,
+    AnalysisJob, BottleneckEvent, CrowdMetric, CrowdPrediction, Video, VideoForecastRun,
 )
 
 __all__ = [
     "Base", "Camera", "Video", "AnalysisJob", "CrowdMetric",
-    "CrowdPrediction", "BottleneckEvent",
+    "CrowdPrediction", "VideoForecastRun", "BottleneckEvent",
     "VisionResult", "VisionZoneMetric", "VisionBottleneckScore", "VisionExtendedResult",
     "VideoRoiRevision",
     "VenueRevision",

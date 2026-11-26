@@ -75,3 +75,6 @@ data/simcrowd/*
 !data/simcrowd/scenarios.csv
 forecast/bottleneck/runs/*/models/
 forecast/bottleneck/runs/*/*.parquet
+
+# local DB dumps (may contain data)
+backend/db_export/

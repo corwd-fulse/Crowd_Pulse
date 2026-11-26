@@ -365,7 +365,7 @@ def video_forecast(job_id: UUID, source: str = 'yolo', horizon: int = 60, db: Se
 
     get_result(job_id, db)
     try:
-        return forecast_service.video_forecast(job_id, source, horizon)
+        return forecast_service.video_forecast(job_id, source, horizon, db)
     except forecast_service.ForecastNotFound as exc:
         raise HTTPException(404, str(exc)) from None
     except ValueError as exc:
