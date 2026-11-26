@@ -30,7 +30,7 @@
     {
       "id": "cam-mid",
       "name": "가운데 카메라 (IMG_0494)",
-      "job_id": null,
+      "job_id": "05b82864-d75f-4a9d-853f-dd85872bc341",
       "axis": "x",
       "start_offset_s": 0,
       "minus": {
@@ -41,7 +41,7 @@
         "fest-top": 1,
         "fest-bottom": -1
       },
-      "meaning": "왼쪽으로 지나감 = 위 축제 -> 아래 축제, 오른쪽으로 지나감 = 아래 축제 -> 위 축제 (분석 끝나면 연결)"
+      "meaning": "왼쪽으로 지나감 = 위 축제 -> 아래 축제, 오른쪽으로 지나감 = 아래 축제 -> 위 축제"
     },
     {
       "id": "cam-bottom",
