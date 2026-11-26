@@ -4,6 +4,17 @@ import {api} from './api';
 
 export const RATE_WINDOW_S = 60;
 
+// 혼잡도 3단계: 기준 인원(관리자 입력 수용 인원, 없으면 이 타임라인 최대 인원) 대비 비율
+export const CONGESTION_LEVELS = [
+  {max: 0.5, label: '여유', color: '#22c55e'},
+  {max: 0.8, label: '주의', color: '#f59e0b'},
+  {max: Infinity, label: '위험', color: '#dc2626'},
+] as const;
+export function congestionLevel(count: number, reference: number) {
+  const ratio = reference > 0 ? count / reference : 0;
+  return {ratio, ...CONGESTION_LEVELS.find((l) => ratio < l.max)!};
+}
+
 export interface GateCounts {job_id: string; seconds: number; plus: number[]; minus: number[]; axis: 'x' | 'y'; line: number; plus_means: string; minus_means: string}
 export interface FlowCamera {id: string; name: string; job_id: string | null; axis: 'x' | 'y'; start_offset_s: number;
   plus: Record<string, number>; minus: Record<string, number>; meaning: string; gate: GateCounts | null}

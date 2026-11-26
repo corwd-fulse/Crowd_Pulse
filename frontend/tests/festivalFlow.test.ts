@@ -39,3 +39,16 @@ describe('festival flow stock model', () => {
     expect(cameraRates(cfg().cameras[1], 2)).toEqual({plus: 0, minus: 180});
   });
 });
+
+import {congestionLevel} from '../src/services/festivalFlow';
+
+describe('congestion levels', () => {
+  it('green below 50%, orange 50-80%, red from 80% of the reference', () => {
+    expect(congestionLevel(49, 100).label).toBe('여유');
+    expect(congestionLevel(50, 100).label).toBe('주의');
+    expect(congestionLevel(79, 100).label).toBe('주의');
+    expect(congestionLevel(80, 100).label).toBe('위험');
+    expect(congestionLevel(500, 100).color).toBe('#dc2626');
+    expect(congestionLevel(10, 0).label).toBe('여유');
+  });
+});

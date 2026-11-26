@@ -5,7 +5,7 @@ import axios from 'axios';
 import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
 import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
 import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
-import {buildTimeline,cameraRates,getFestivalFlow,zoneFlowAt} from '../../services/festivalFlow';
+import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,getFestivalFlow,zoneFlowAt} from '../../services/festivalFlow';
 import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
@@ -48,6 +48,7 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
   const [flowMode,setFlowMode]=useState(false),[flowCfg,setFlowCfg]=useState<FestivalFlowConfig|null|undefined>(undefined);
   const [flowTime,setFlowTime]=useState(0),[flowPlaying,setFlowPlaying]=useState(false),[flowSpeed,setFlowSpeed]=useState(10);
   const [initials,setInitials]=useState<Record<string,number>>({});
+  const [capacities,setCapacities]=useState<Record<string,number>>({});  // 혼잡 기준 인원(0/없음 = 지도 구역 수용 인원 -> 타임라인 최대)
   useEffect(()=>{if(!flowMode||flowCfg!==undefined)return;const c=new AbortController();
     getFestivalFlow(venueId,c.signal).then(r=>{if(!c.signal.aborted){setFlowCfg(r);if(r)setInitials(Object.fromEntries(Object.entries(r.zones).map(([k,v])=>[k,v.initial])));}});
     return ()=>c.abort();},[flowMode,flowCfg,venueId]);
@@ -102,8 +103,8 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
             let line2=forecastH?(f?.predicted!=null&&o.count!==null?`현재 ${o.count}명 → ${f.predicted>=o.count?'▲':'▼'}${Math.abs(f.predicted-o.count).toFixed(1)}`:(f?.reason??'영상 ROI 연결 필요')):`유입 ${value(o.inflow)} / 유출 ${value(o.outflow)}`;
             if(flowActive&&flowCfg&&timeline){
               if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
-                const ref=o.zone.capacity??Math.max(1,flowMax[o.zone.id]??1);fill=heatColor(shownValue/ref);opacity=.3+.5*Math.min(1,shownValue/ref);
-                line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''}`;
+                const ref=capacities[o.zone.id]||o.zone.capacity||Math.max(1,flowMax[o.zone.id]??1);const lv=congestionLevel(shownValue,ref);fill=lv.color;opacity=.45;
+                line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명 · ${lv.label}`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''} · ${lv.label}`;
                 line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}명/분${zf.belowZero?' · 시작 인원 부족':''}`;}
               else if(midCamera&&o.zone.mapping?.job_id===midCamera.job_id){const r=cameraRates(midCamera,flowTime);fill='#8b7ff0';opacity=.18;
                 line1=`${o.zone.name} (가운데 카메라)`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
@@ -123,6 +124,9 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
               <input aria-label="통합 타임라인" type="range" min={0} max={timeline.length-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>
               <span>{Math.floor(flowTime/60)}:{String(Math.floor(flowTime%60)).padStart(2,'0')} / {Math.floor(timeline.length/60)}:{String(timeline.length%60).padStart(2,'0')}</span></div>
             <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=><label key={z} title={flowCfg.zones[z].basis}>{config.zones.find(v=>v.id===z)?.name??z} 시작 인원 <input aria-label={`${z} 시작 인원`} type="number" min={0} max={100000} value={initials[z]??0} onChange={e=>setInitials({...initials,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:80}}/></label>)}</div>
+            <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=>{const zone=config.zones.find(v=>v.id===z);const fallback=zone?.capacity??Math.round(flowMax[z]??0);return <label key={z}>{zone?.name??z} 혼잡 기준 인원 <input aria-label={`${z} 혼잡 기준 인원`} type="number" min={0} max={1000000} placeholder={String(fallback)} value={capacities[z]||''} onChange={e=>setCapacities({...capacities,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:90}}/></label>;})}
+              <span className="venue-legend" style={{margin:0}}>{CONGESTION_LEVELS.map((l,i)=><span key={l.label} style={{color:l.color}}>● {l.label} {i===0?'50% 미만':i===1?'50~80%':'80% 이상'}</span>)}</span></div>
+            <p className="venue-muted">혼잡도 = 구역 인원 ÷ 혼잡 기준 인원. 비워 두면 지도 구역의 수용 인원, 그것도 없으면 이 타임라인의 최대 인원을 기준으로 씁니다(이 경우 &lsquo;위험&rsquo;은 영상 중 가장 붐빈 때와 비교한 상대값). 안전 기준으로 검증된 값이 아닙니다.</p>
             <ul className="venue-actions">{Object.entries(flowCfg.zones).filter(([,v])=>v.basis).map(([z,v])=><li key={z}>{config.zones.find(x=>x.id===z)?.name??z} 시작 인원 근거: {v.basis}</li>)}</ul>
             {flowCfg.initial_note&&<p className="venue-muted">{flowCfg.initial_note}</p>}
             <ul className="venue-actions">{flowCfg.cameras.map(c=>{const act=timeline.cameraActive[c.id];const r=cameraRates(c,flowTime);return <li key={c.id}><b>{c.name}</b> — {!c.job_id?'분석 결과 연결 전 (계산에서 제외)':!c.gate?'경계선 통과 수 미계산 (python -m app.gate_flow)':!act||flowTime<act[0]||flowTime>=act[1]?'이 시각 영상 없음':`최근 1분 ${c.axis==='x'?`왼쪽 ${r?.minus.toFixed(0)} · 오른쪽 ${r?.plus.toFixed(0)}`:`들어감 ${r?.minus.toFixed(0)} · 나옴 ${r?.plus.toFixed(0)}`}명/분`}<br/><small>{c.meaning}</small></li>;})}</ul>
