@@ -20,12 +20,12 @@ import pandas as pd
 from .serving.video_pipeline import run_video_forecast
 
 
-def run(work, source, detections, fps, horizons=(10, 30, 60)):
+def run(work, source, detections, fps, horizons=(10, 30, 60), pre_dir=None):
     work = Path(work)
     out = work / source
     zones = json.loads((work / "zones.json").read_text(encoding="utf-8"))
     res = run_video_forecast(out / "input", out_dir=out, horizons=horizons, detections_csv=detections, zones=zones, fps=fps,
-                             zone_meta=work / "zone_meta.json", job_id=work.parent.name)
+                             zone_meta=work / "zone_meta.json", job_id=work.parent.name, pre_dir=pre_dir)
     info = res["info"]
     (out / "summary.json").write_text(json.dumps(_jsonable(info), ensure_ascii=False, indent=1, default=str), encoding="utf-8")
     return res
@@ -44,9 +44,11 @@ def main():
     ap.add_argument("--source", nargs="+", default=["yolo", "dmcount"])
     ap.add_argument("--detections", required=True)
     ap.add_argument("--fps", type=float, required=True)
+    ap.add_argument("--pre-dir", help="미리 학습 모델 폴더(기본 serving/artifacts/video). 이 영상을 뺀 영상들로 학습한 폴더를 주면 "
+                    "lightgbm_pre·lstm_pre 점수가 처음 보는 영상 기준이 된다(학습에 쓴 영상을 다시 채점하면 부풀려짐)")
     a = ap.parse_args()
     for s in a.source:
-        res = run(a.work, s, a.detections, a.fps)
+        res = run(a.work, s, a.detections, a.fps, pre_dir=a.pre_dir)
         i = res["info"]
         print(f"[{s}] 영상 {i['seconds']}초, 구역 {i['zones']} | 초 단위 {i['rows']}행 | 이상 이벤트 {i['anomaly_events']}건 "
               f"(단계 {i['level_events']}) | IF: {i.get('iforest')} | 병목: {i.get('bottleneck')}")
