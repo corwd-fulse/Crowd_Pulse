@@ -18,7 +18,7 @@ from app.services.vision_results import BASE_DIR
 
 SOURCES = ('yolo', 'dmcount', 'fused')
 HORIZONS = (10, 30, 60)
-SERIES_MODELS = ('persistence', 'ridge_ar', 'lightgbm', 'lightgbm_pre')
+SERIES_MODELS = ('persistence', 'ridge_ar', 'lightgbm', 'lightgbm_pre', 'lstm_pre')
 LEVEL_NAMES = {0: '낮음', 1: '주의', 2: '높음'}
 
 

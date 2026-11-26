@@ -347,7 +347,7 @@ export async function getModelComparison(jobId: string, signal?: AbortSignal): P
 }
 
 export type VideoForecastSource = 'yolo' | 'dmcount' | 'fused';
-export type VideoForecastModel = 'persistence' | 'ridge_ar' | 'lightgbm' | 'lightgbm_pre';
+export type VideoForecastModel = 'persistence' | 'ridge_ar' | 'lightgbm' | 'lightgbm_pre' | 'lstm_pre';
 
 export interface VideoForecastPoint {
   zone: string;
@@ -358,6 +358,7 @@ export interface VideoForecastPoint {
   ridge_ar?: number | null;
   lightgbm?: number | null;
   lightgbm_pre?: number | null;
+  lstm_pre?: number | null;
 }
 
 export interface VideoForecastResponse {

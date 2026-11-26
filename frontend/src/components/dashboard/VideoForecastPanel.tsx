@@ -13,8 +13,9 @@ const MODEL_STYLE: Record<VideoForecastModel, {label: string; color: string; das
   ridge_ar: {label: 'Ridge AR', color: '#1497c2'},
   lightgbm: {label: 'LightGBM(영상 내 학습)', color: '#c4861a'},
   lightgbm_pre: {label: 'LightGBM(미리 학습)', color: '#a46ff0'},
+  lstm_pre: {label: 'LSTM(미리 학습)', color: '#d4558f', dash: '8 3'},
 };
-const MODEL_ORDER: VideoForecastModel[] = ['persistence', 'ridge_ar', 'lightgbm', 'lightgbm_pre'];
+const MODEL_ORDER: VideoForecastModel[] = ['persistence', 'ridge_ar', 'lightgbm', 'lightgbm_pre', 'lstm_pre'];
 const LEVEL_FILL: Record<number, string> = {1: 'var(--color-warn)', 2: 'var(--color-danger)'};
 
 const clock = (sec: number) => `${Math.floor(sec / 60)}:${String(Math.floor(sec % 60)).padStart(2, '0')}`;
