@@ -15,8 +15,9 @@ from .anomaly_video import LOOKBACK_S, _events, _finish
 # 속도 단위: 초당 몸 높이 배수(카메라 해상도·fps와 무관하게 비교하려고 박스 높이로 나눈다)
 MOVE_HPS, SLOW_HPS, DIR_WINDOW_S, TRACK_WINDOW_FRAMES = 0.2, 0.1, 10, 5
 LEVELS = ("낮음", "주의", "높음")
-BN_WARN, BN_HIGH, IF_WARN = 40.0, 70.0, 0.8  # 병목 점수 기준은 팀 FR-ZON-05와 같다
+BN_WARN, BN_HIGH, IF_WARN = 40.0, 70.0, 0.9  # 병목 점수 기준은 팀 FR-ZON-05와 같다
 UP_S, DOWN_S, LONG_WARN_S = 3, 5, 20         # 올릴 때 3초 유지, 내릴 때 5초 풀림, 주의 20초 연속이면 높음
+EVENT_MERGE_GAP_S = 30                       # '주의' 구간 사이가 이 초 이하로 끊기면 한 이벤트로 합친다(0 = 합치지 않음)
 
 
 def _zone_name(z):
@@ -232,7 +233,7 @@ def hysteresis(cand, up_s=UP_S, down_s=DOWN_S, long_s=LONG_WARN_S):
     return np.array(out, dtype=int)
 
 
-def grade_levels(ts, rules=None, if_scores=None, bottleneck=None, bn_window_s=10):
+def grade_levels(ts, rules=None, if_scores=None, bottleneck=None, bn_window_s=10, if_warn=None, up_s=None):
     """구역별 매초 단계 타임라인 -> DataFrame[zone_id, sec, level, level_num, candidate, 신호들...].
     ts: [sec, zone, count, motion(, reverse_ratio, dwell)], rules: rule_events() 결과, if_scores: iforest_scores()[0],
     bottleneck: 팀 bottleneck_scores.csv(window_start, zone, score). 없는 신호는 빼고 판정한다."""
@@ -263,9 +264,9 @@ def grade_levels(ts, rules=None, if_scores=None, bottleneck=None, bn_window_s=10
             t["if_anomaly"] = t.sec.map(f.is_anomaly).fillna(False).astype(bool)
         rule_on, bn = t.rule_kind != "", t.bottleneck_score.fillna(0)
         high = (bn >= BN_HIGH) | (rule_on & t.if_anomaly)
-        warn = (bn >= BN_WARN) | rule_on | (t.if_score.fillna(0) >= IF_WARN)
+        warn = (bn >= BN_WARN) | rule_on | (t.if_score.fillna(0) >= (IF_WARN if if_warn is None else if_warn))
         t["candidate"] = np.where(high, 2, np.where(warn, 1, 0))
-        t["level_num"] = hysteresis(t.candidate.to_numpy())
+        t["level_num"] = hysteresis(t.candidate.to_numpy(), up_s=UP_S if up_s is None else up_s)
         t["level"] = t.level_num.map(dict(enumerate(LEVELS)))
         out.append(t)
     cols = ["zone_id", "sec", "level", "level_num", "candidate", "count", "count_delta_5s", "motion_drop", "reverse_ratio", "dwell",
@@ -299,14 +300,27 @@ EVENT_COLUMNS = ["job_id", "zone_id", "event_at", "event_sec", "end_sec", "score
 Z_FEATURES = ["count_delta_5s", "motion_drop", "reverse_ratio", "dwell", "if_score", "bottleneck_score"]
 
 
-def level_events(timeline, job_id="sample", base_time="2026-01-01 00:00:00+09:00"):
-    """'주의' 이상이 이어진 구간 -> 이벤트(method='level'). 최고 단계, 지속 시간, 최고 시각, 근거 문장, 평소 대비 편차 z(features)."""
+def _merge_segments(segs, sec, gap_s):
+    """(시작, 끝) 위치 구간들 중 사이가 gap_s초 이하로 끊긴 것을 하나로 합친다."""
+    out = []
+    for a, b in segs:
+        if out and gap_s > 0 and sec[a] - sec[out[-1][1]] - 1 <= gap_s:
+            out[-1] = (out[-1][0], b)
+        else:
+            out.append((a, b))
+    return out
+
+
+def level_events(timeline, job_id="sample", base_time="2026-01-01 00:00:00+09:00", merge_gap_s=None):
+    """'주의' 이상이 이어진 구간 -> 이벤트(method='level'). 최고 단계, 지속 시간, 최고 시각, 근거 문장, 평소 대비 편차 z(features).
+    merge_gap_s초 이하로 잠깐 풀렸다 다시 오른 구간은 한 이벤트로 합친다(같은 상황이 여러 건으로 쪼개지는 것 방지)."""
+    gap = EVENT_MERGE_GAP_S if merge_gap_s is None else merge_gap_s
     rows = []
     for z, t in timeline.groupby("zone_id"):
         t = t.sort_values("sec").reset_index(drop=True)
         cnt = t.set_index("sec")["count"]
         mu, sd = t[Z_FEATURES].mean(), t[Z_FEATURES].std(ddof=0).replace(0, np.nan)
-        for a, b in _events(t.level_num.to_numpy() >= 1, t.sec.to_numpy(), 1):
+        for a, b in _merge_segments(_events(t.level_num.to_numpy() >= 1, t.sec.to_numpy(), 1), t.sec.to_numpy(), gap):
             seg = t.iloc[a:b + 1]
             pk = seg.sort_values(["level_num", "candidate", "rule_strength", "if_score"], ascending=False).iloc[0]
             zv = {f: round(float((pk[f] - mu[f]) / sd[f]), 2) for f in Z_FEATURES if pd.notna(pk[f]) and pd.notna(sd[f])}
