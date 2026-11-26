@@ -91,3 +91,15 @@ describe('festival phases', () => {
     expect(minutesToEmpty(300, -2)).toBeNull();
   });
 });
+
+import {cumulativeAt} from '../src/services/festivalFlow';
+
+describe('post-festival cumulative exits', () => {
+  it('counts exits, entries and per-side exits up to a time', () => {
+    const g = {job_id: 'p', seconds: 3, plus: [2, 1, 4], minus: [0, 1, 0], axis: 'y' as const, line: 0.8, plus_means: '', minus_means: '',
+      exit_sides: {left: [1, 1, 2], center: [0, 0, 1], right: [1, 0, 1]}};
+    expect(cumulativeAt(g, 1.5)).toEqual({exits: 3, entries: 1, sides: {left: 2, center: 0, right: 1}});
+    expect(cumulativeAt(g, 99)?.exits).toBe(7);
+    expect(cumulativeAt(null, 1)).toBeNull();
+  });
+});

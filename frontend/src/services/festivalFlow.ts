@@ -128,3 +128,13 @@ export function exitShares(g: GateCounts | null): {counts: Record<ExitSide, numb
 export function minutesToEmpty(remaining: number, netOutPerMin: number): number | null {
   return netOutPerMin > 0 ? remaining / netOutPerMin : null;
 }
+
+/** 카메라 영상 시각 time(초)까지의 누적 통과 수. 출입구 카메라(axis y)에서 plus = 나감, minus = 들어감. */
+export function cumulativeAt(g: GateCounts | null, time: number): {exits: number; entries: number; sides: Record<ExitSide, number> | null} | null {
+  if (!g) return null;
+  const t = Math.max(0, Math.min(g.seconds - 1, Math.floor(time)));
+  let exits = 0, entries = 0;
+  for (let i = 0; i <= t; i++) { exits += g.plus[i]; entries += g.minus[i]; }
+  const sides = g.exit_sides ? Object.fromEntries(EXIT_SIDES.map((k) => [k, g.exit_sides![k].slice(0, t + 1).reduce((a, b) => a + b, 0)])) as Record<ExitSide, number> : null;
+  return {exits, entries, sides};
+}

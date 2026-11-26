@@ -1,4 +1,4 @@
-import {EXIT_SIDES, averageRates, exitShares, minutesToEmpty, zoneFlowAt} from '../../services/festivalFlow';
+import {EXIT_SIDES, averageRates, cumulativeAt, exitShares, minutesToEmpty, zoneFlowAt} from '../../services/festivalFlow';
 import type {FestivalFlowConfig, FlowTimeline} from '../../services/festivalFlow';
 
 // 축제 전·후 비교 패널: 축제 전 -> 축제 중 인원 증가, 축제 후 유출 속도·방향·비워지는 시간.
@@ -7,8 +7,8 @@ import type {FestivalFlowConfig, FlowTimeline} from '../../services/festivalFlow
 const f1 = (v: number | null | undefined) => (v == null ? '—' : v.toFixed(1));
 const ratio = (a: number | null | undefined, b: number | null | undefined) => (a == null || b == null || b === 0 ? '—' : `${(a / b).toFixed(1)}배`);
 
-export default function FestivalPhasePanel({cfg, timeline, initials, phase, zoneName}: {
-  cfg: FestivalFlowConfig; timeline: FlowTimeline; initials: Record<string, number>; phase: 'pre' | 'post'; zoneName: (id: string) => string;
+export default function FestivalPhasePanel({cfg, timeline, initials, phase, zoneName, time = 0}: {
+  cfg: FestivalFlowConfig; timeline: FlowTimeline; initials: Record<string, number>; phase: 'pre' | 'post'; zoneName: (id: string) => string; time?: number;
 }) {
   const ph = cfg.phases?.[phase];
   if (!ph) return <p className="venue-muted">이 단계 설정이 없습니다.</p>;
@@ -31,14 +31,14 @@ export default function FestivalPhasePanel({cfg, timeline, initials, phase, zone
             <tbody>{rows.map(([label, p, d]) => <tr key={label}><td>{label}</td><td>{f1(phase === 'pre' ? p : d)}</td><td>{f1(phase === 'pre' ? d : p)}</td>
               <td>{phase === 'pre' ? ratio(d, p) : ratio(p, d)}</td></tr>)}</tbody></table>}
         {phase === 'pre' && !dc?.gate && <p className="venue-muted">축제 중 같은 위치 카메라 결과가 아직 연결되지 않아 비교값이 비어 있습니다(분석이 끝나면 자동 연결).</p>}
-        {phase === 'post' && pc.exit_zone && <PostExit cfg={cfg} timeline={timeline} initials={initials} pcGate={pc.gate} duringGate={dc?.gate ?? null} zone={pc.exit_zone} zoneName={zoneName} />}
+        {phase === 'post' && pc.exit_zone && <PostExit time={time} cfg={cfg} timeline={timeline} initials={initials} pcGate={pc.gate} duringGate={dc?.gate ?? null} zone={pc.exit_zone} zoneName={zoneName} />}
       </div>;
     })}
   </div>;
 }
 
-function PostExit({cfg, timeline, initials, pcGate, duringGate, zone, zoneName}: {
-  cfg: FestivalFlowConfig; timeline: FlowTimeline; initials: Record<string, number>; pcGate: FestivalFlowConfig['cameras'][number]['gate'];
+function PostExit({time, cfg, timeline, initials, pcGate, duringGate, zone, zoneName}: {
+  time: number; cfg: FestivalFlowConfig; timeline: FlowTimeline; initials: Record<string, number>; pcGate: FestivalFlowConfig['cameras'][number]['gate'];
   duringGate: FestivalFlowConfig['cameras'][number]['gate']; zone: string; zoneName: (id: string) => string;
 }) {
   const post = exitShares(pcGate), dur = exitShares(duringGate), r = averageRates(pcGate);
@@ -48,8 +48,20 @@ function PostExit({cfg, timeline, initials, pcGate, duringGate, zone, zoneName}:
   const netOut = r ? r.plus - r.minus : 0;
   const minutes = minutesToEmpty(remaining, netOut);
   const exitPerMin = r?.plus ?? 0;
+  const now = cumulativeAt(pcGate, time), all = cumulativeAt(pcGate, Infinity);
+  const leftNow = now ? Math.max(0, remaining - (now.exits - now.entries)) : null;
   return <div style={{marginTop: 8}}>
-    <h4>축제 후 어디로 빠져나가나 (나간 사람 {post?.total ?? 0}명 기준)</h4>
+    <h4>축제 후 얼마나 빠져나갔나</h4>
+    <table className="w-full text-left text-xs"><thead><tr><th>구분</th><th>지금까지 (축제 후 {Math.floor(time / 60)}분 {Math.floor(time % 60)}초)</th><th>영상 전체 ({Math.round((pcGate?.seconds ?? 0) / 60)}분)</th></tr></thead>
+      <tbody>
+        <tr><td><b>빠져나감</b></td><td><b>{now?.exits ?? 0}명</b></td><td>{all?.exits ?? 0}명</td></tr>
+        <tr><td>들어옴</td><td>{now?.entries ?? 0}명</td><td>{all?.entries ?? 0}명</td></tr>
+        <tr><td>순유출 (빠져나감 − 들어옴)</td><td>{now ? now.exits - now.entries : 0}명</td><td>{all ? all.exits - all.entries : 0}명</td></tr>
+        {EXIT_SIDES.map((k) => <tr key={k}><td>└ {labels[k]}으로 빠져나감</td><td>{now?.sides?.[k] ?? 0}명</td><td>{all?.sides?.[k] ?? 0}명</td></tr>)}
+        <tr><td>{zoneName(zone)} 남은 인원 (추정)</td><td>{leftNow == null ? '—' : `약 ${Math.round(leftNow)}명`}</td><td>축제 종료 시 약 {Math.round(remaining)}명</td></tr>
+      </tbody></table>
+    <p className="venue-muted">방향별 합은 &lsquo;빠져나감&rsquo;보다 적을 수 있습니다(1초 이상 추적되며 화면 아래로 충분히 이동한 사람만 방향을 판정). 남은 인원은 축제 중 흐름 계산의 끝값(시작 인원 가정 포함)에서 순유출을 뺀 값입니다.</p>
+    <h4>어느 쪽으로 빠져나가나 (방향을 판정한 {post?.total ?? 0}명 기준)</h4>
     {!post ? <p className="venue-muted">방향 데이터가 없습니다 (python -m app.gate_flow ... --exit-sides).</p> :
       <table className="w-full text-left text-xs"><thead><tr><th>방향</th><th>축제 후</th><th>축제 중</th><th>10초 / 30초 / 60초 뒤 예상 유출</th></tr></thead>
         <tbody>{EXIT_SIDES.map((k) => <tr key={k}><td>{labels[k]}</td>

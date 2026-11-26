@@ -5,7 +5,7 @@ import axios from 'axios';
 import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
 import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
 import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
-import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,EXIT_SIDES,exitShares,getFestivalFlow,startCounts,zoneFlowAt} from '../../services/festivalFlow';
+import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,cumulativeAt,EXIT_SIDES,exitShares,getFestivalFlow,startCounts,zoneFlowAt} from '../../services/festivalFlow';
 import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
@@ -59,8 +59,11 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
   const timeline=useMemo(()=>flowCfg?buildTimeline(flowCfg):null,[flowCfg]);
   const starts=useMemo(()=>flowCfg&&timeline?startCounts(flowCfg,timeline):null,[flowCfg,timeline]);
   useEffect(()=>{if(starts)setInitials(Object.fromEntries(Object.entries(starts).map(([k,v])=>[k,v.count])));},[starts]);
-  useEffect(()=>{if(!flowPlaying||!timeline)return;const id=window.setInterval(()=>setFlowTime(t=>Math.min(timeline.length-1,t+flowSpeed*.5)),500);return ()=>window.clearInterval(id);},[flowPlaying,flowSpeed,timeline]);
-  useEffect(()=>{if(flowPlaying&&timeline&&flowTime>=timeline.length-1)setFlowPlaying(false);},[flowPlaying,flowTime,timeline]);
+  const postCam=flowCfg?.phases?.post.cameras[0]??null;
+  const phaseLength=phase==='post'&&postCam?.gate?postCam.gate.seconds:timeline?.length??1;  // 축제 후 단계는 축제 후 영상 시각으로 재생
+  useEffect(()=>{if(!flowPlaying||!timeline)return;const id=window.setInterval(()=>setFlowTime(t=>Math.min(phaseLength-1,t+flowSpeed*.5)),500);return ()=>window.clearInterval(id);},[flowPlaying,flowSpeed,timeline,phaseLength]);
+  useEffect(()=>{if(flowPlaying&&timeline&&flowTime>=phaseLength-1)setFlowPlaying(false);},[flowPlaying,flowTime,timeline,phaseLength]);
+  useEffect(()=>{setFlowTime(0);setFlowPlaying(false);},[phase]);
   const flowMax=useMemo(()=>{if(!timeline)return {} as Record<string,number>;return Object.fromEntries(Object.entries(timeline.delta).map(([z,d])=>{let m=0;for(const v of d)m=Math.max(m,v);return [z,(initials[z]??0)+m];}));},[timeline,initials]);
   const flowActive=flowMode&&!!flowCfg&&!!timeline;
   const midCamera=flowCfg?.cameras.find(c=>c.axis==='x');
@@ -109,7 +112,10 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
             let line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${f?.predicted!=null?`${f.predicted.toFixed(1)}명`:'예측 없음'}`:`${o.zone.name} · ${value(o.count)}${o.count!==null?'명':''}`;
             let line2=forecastH?(f?.predicted!=null&&o.count!==null?`현재 ${o.count}명 → ${f.predicted>=o.count?'▲':'▼'}${Math.abs(f.predicted-o.count).toFixed(1)}`:(f?.reason??'영상 ROI 연결 필요')):`유입 ${value(o.inflow)} / 유출 ${value(o.outflow)}`;
             if(flowActive&&flowCfg&&timeline){
-              if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
+              const postZone=phase==='post'&&postCam?.exit_zone===o.zone.id?cumulativeAt(postCam.gate,flowTime):null;
+              if(postZone){const endCount=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,timeline.length-1,0).shown;const left=Math.max(0,endCount-(postZone.exits-postZone.entries));
+                fill='#f59e0b';opacity=.35;line1=`${o.zone.name} · 축제 후 ${Math.floor(flowTime/60)}분: 빠져나감 ${postZone.exits}명`;line2=`들어옴 ${postZone.entries}명 · 남은 약 ${Math.round(left)}명`;}
+              else if(o.zone.id in flowCfg.zones){const zf=zoneFlowAt(timeline,o.zone.id,initials[o.zone.id]??0,flowTime,forecastH);const shownValue=forecastH?zf.predicted!:zf.shown;
                 const ref=capacities[o.zone.id]||o.zone.capacity||Math.max(1,flowMax[o.zone.id]??1);const lv=congestionLevel(shownValue,ref);fill=lv.color;opacity=.45;
                 line1=forecastH?`${o.zone.name} · ${forecastH}초 뒤 ${Math.round(zf.predicted!)}명 · ${lv.label}`:`${o.zone.name} · ${Math.round(zf.shown)}명${zf.belowZero?' *':''} · ${lv.label}`;
                 line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}명/분${zf.belowZero?' · 시작 인원 부족':''}`;}
@@ -123,7 +129,7 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
           {flowActive&&phase==='post'&&flowCfg?.phases?.post.cameras.map(pc=>{const zone=config.zones.find(z=>z.id===pc.exit_zone);const sh=exitShares(pc.gate);if(!zone||!sh)return null;
             const bottom=zone.polygon.reduce((a,p)=>p[1]>a[1]?p:a,zone.polygon[0]);const cx=center(zone.polygon)[0],y=bottom[1]+10;const dirs={left:[-150,70],center:[0,110],right:[150,70]} as const;const labels=flowCfg.exit_labels??{left:'왼쪽',center:'정면',right:'오른쪽'};
             return <g key={pc.id} aria-label="축제 후 유출 방향">{EXIT_SIDES.map(k=>{const [dx,dy]=dirs[k];const w=2+sh.shares[k]*22;return <g key={k}><path d={`M${cx},${y} L${cx+dx},${y+dy}`} stroke="#f59e0b" strokeWidth={w} strokeOpacity={.85} markerEnd="url(#venue-arrow)" vectorEffect="non-scaling-stroke"/>
-              <text transform={`translate(${cx+dx} ${y+dy+22}) scale(1 ${config.width/config.height})`} textAnchor="middle" fontSize="18" fill="#fff" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{labels[k]} {Math.round(sh.shares[k]*100)}%</text></g>;})}</g>;})}
+              <text transform={`translate(${cx+dx} ${y+dy+22}) scale(1 ${config.width/config.height})`} textAnchor="middle" fontSize="18" fill="#fff" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{labels[k]} {cumulativeAt(pc.gate,flowTime)?.sides?.[k]??0}명 ({Math.round(sh.shares[k]*100)}%)</text></g>;})}</g>;})}
           {config.markers.map(m=><g key={m.id}><circle cx={m.point[0]} cy={m.point[1]} r="9" fill={m.kind==='camera'?'#79a7ce':'#dfca85'}/><text x={m.point[0]+14} y={m.point[1]+6} fontSize="18" fill="#fff">{m.name}</text></g>)}
           {draft.length>0&&<polyline points={draft.map(p=>p.join(',')).join(' ')} fill="#4aa7bf30" stroke="#fff" strokeWidth="2" vectorEffect="non-scaling-stroke"/>}{draft.map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="5" fill="#fff"/>)}</g>
         </svg>{!config.image&&<div className="venue-map-empty">행사장 평면도를 업로드하세요<span>PNG · JPG · SVG / 최대 5MiB</span></div>}</div>
@@ -131,11 +137,11 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
         {flowMode&&(flowCfg===undefined?<p className="venue-notice">축제 흐름 설정 불러오는 중…</p>:!flowCfg||!timeline?<p className="venue-notice">이 행사장에는 축제 전체 흐름 설정이 없습니다 (backend/configs/festival_flow.json).</p>:
           <div className="venue-settings" aria-label="축제 전체 흐름">
             <div className="venue-toolbar" role="radiogroup" aria-label="축제 단계"><span>축제 단계</span>{(['pre','during','post'] as const).map(k=><button key={k} type="button" role="radio" aria-checked={phase===k} aria-pressed={phase===k} onClick={()=>setPhase(k)}>{k==='pre'?'축제 전 (비교)':k==='during'?'축제 중 (카메라 통합)':'축제 후 (유출)'}</button>)}</div>
-            {phase!=='during'&&<FestivalPhasePanel cfg={flowCfg} timeline={timeline} initials={initials} phase={phase} zoneName={id=>config.zones.find(z=>z.id===id)?.name??id}/>}
+            {phase!=='during'&&<FestivalPhasePanel cfg={flowCfg} timeline={timeline} initials={initials} phase={phase} time={flowTime} zoneName={id=>config.zones.find(z=>z.id===id)?.name??id}/>}
             <div className="venue-toolbar"><button type="button" onClick={()=>setFlowPlaying(!flowPlaying)}>{flowPlaying?'일시정지':'재생'}</button>
               <label>속도 <select aria-label="흐름 재생 속도" value={flowSpeed} onChange={e=>setFlowSpeed(Number(e.target.value))}>{[1,10,30,60].map(n=><option key={n} value={n}>{n}배</option>)}</select></label>
-              <input aria-label="통합 타임라인" type="range" min={0} max={timeline.length-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>
-              <span>{Math.floor(flowTime/60)}:{String(Math.floor(flowTime%60)).padStart(2,'0')} / {Math.floor(timeline.length/60)}:{String(timeline.length%60).padStart(2,'0')}</span></div>
+              <input aria-label="통합 타임라인" type="range" min={0} max={phaseLength-1} step={1} value={Math.floor(flowTime)} onChange={e=>setFlowTime(Number(e.target.value))} style={{flex:1,minWidth:160}}/>
+              <span>{phase==='post'?'축제 후 영상 ':''}{Math.floor(flowTime/60)}:{String(Math.floor(flowTime%60)).padStart(2,'0')} / {Math.floor(phaseLength/60)}:{String(phaseLength%60).padStart(2,'0')}</span></div>
             <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=><label key={z} title={flowCfg.zones[z].basis}>{config.zones.find(v=>v.id===z)?.name??z} 시작 인원 <input aria-label={`${z} 시작 인원`} type="number" min={0} max={100000} value={initials[z]??0} onChange={e=>setInitials({...initials,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:80}}/></label>)}</div>
             <div className="venue-toolbar">{Object.keys(flowCfg.zones).map(z=>{const zone=config.zones.find(v=>v.id===z);const fallback=zone?.capacity??Math.round(flowMax[z]??0);return <label key={z}>{zone?.name??z} 혼잡 기준 인원 <input aria-label={`${z} 혼잡 기준 인원`} type="number" min={0} max={1000000} placeholder={String(fallback)} value={capacities[z]||''} onChange={e=>setCapacities({...capacities,[z]:Math.max(0,Number(e.target.value)||0)})} style={{width:90}}/></label>;})}
               <span className="venue-legend" style={{margin:0}}>{CONGESTION_LEVELS.map((l,i)=><span key={l.label} style={{color:l.color}}>● {l.label} {i===0?'50% 미만':i===1?'50~80%':'80% 이상'}</span>)}</span></div>
