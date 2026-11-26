@@ -34,14 +34,12 @@
       "axis": "x",
       "start_offset_s": 0,
       "minus": {
-        "fest-bottom": 1,
         "fest-top": -1
       },
       "plus": {
-        "fest-top": 1,
         "fest-bottom": -1
       },
-      "meaning": "왼쪽으로 지나감 = 위 축제 -> 아래 축제, 오른쪽으로 지나감 = 아래 축제 -> 위 축제"
+      "meaning": "오른쪽(위로)으로 감 = 아래 축제에서 나감, 왼쪽(아래로)으로 감 = 위 축제에서 나감. 반대편 축제에 들어갔는지는 그 축제 입구 카메라가 판단(두 번 세지 않음)"
     },
     {
       "id": "cam-bottom",
