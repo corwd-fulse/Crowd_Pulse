@@ -5,7 +5,7 @@ import axios from 'axios';
 import {getReplay,getVideoForecast,getVisionResultBundle} from '../../services/api';
 import type {AnalysisJobResponse,ReplayResult,VideoForecastResponse,VisionResultBundle} from '../../services/api';
 import {FORECAST_HORIZONS,heatColor,zoneForecast} from '../../services/venueForecast';
-import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,cumulativeAt,EXIT_SIDES,exitShares,getFestivalFlow,startCounts,zoneFlowAt} from '../../services/festivalFlow';
+import {buildTimeline,cameraRates,CONGESTION_LEVELS,congestionLevel,corridorFlows,cumulativeAt,EXIT_SIDES,exitShares,getFestivalFlow,isCorridorCamera,startCounts,zoneFlowAt} from '../../services/festivalFlow';
 import type {FestivalFlowConfig} from '../../services/festivalFlow';
 import {nextZoneName,validateZones} from '../../services/roiGeometry';
 import type {Point} from '../../services/roiGeometry';
@@ -123,7 +123,8 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
                 const ti=Math.max(0,Math.min(timeline.length-1,Math.floor(flowTime)));const cin=Math.round(timeline.inflow[o.zone.id]?.[ti]??0),cout=Math.round(timeline.outflow[o.zone.id]?.[ti]??0);
                 line2=forecastH?`현재 ${Math.round(zf.shown)}명 → ${zf.change!>=0?'▲':'▼'}${Math.abs(zf.change!).toFixed(1)}`:`누적 들어옴 ${cin} · 나감 ${cout} · 최근 1분 ${zf.rate>=0?'+':''}${(zf.rate*60).toFixed(1)}/분${zf.belowZero?' · 시작 인원 부족':''}`;}
               else if(zoneCamera(o.zone.mapping?.job_id)&&!(o.zone.id in flowCfg.zones)){const zc=zoneCamera(o.zone.mapping?.job_id)!;const r=cameraRates(zc,flowTime);fill='#8b7ff0';opacity=.18;
-                line1=`${o.zone.name} (${zc.name})`;line2=r?`← 아래 축제로 ${r.minus.toFixed(0)}/분 · 위 축제로 ${r.plus.toFixed(0)}/분 →`:'이 시각 영상 없음';}
+                const zn=(id:string)=>config.zones.find(v=>v.id===id)?.name.replace(' 구역','')??id;const cf=corridorFlows(zc,flowTime);line1=`${o.zone.name} (${zc.name})`;
+                line2=!r?'이 시각 영상 없음':cf.map(f=>forecastH?`${zn(f.from)}→${zn(f.to)} ${forecastH}초 뒤 ${f.predicted[forecastH].toFixed(1)}명`:`${zn(f.from)}→${zn(f.to)} 누적 ${f.cumulative} · ${f.perMin.toFixed(0)}/분`).join('  |  ');}
               else{fill='#738398';opacity=.1;line2=pendingCamera&&!o.zone.mapping?`${pendingCamera.name} 분석 끝나면 연결`:'축제 흐름 계산 대상 아님';}
             }
             return <g key={o.zone.id} onPointerDown={e=>{if(!drawing&&!markerMode&&!cameraPlace)e.stopPropagation();}} onClick={()=>{if(!drawing&&!markerMode&&!cameraPlace)setSelected(o.zone.id);}} role="button" tabIndex={0} aria-label={`구역 ${o.zone.name} 선택`} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setSelected(o.zone.id);}}}><polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill={fill} fillOpacity={opacity} stroke={selected===o.zone.id?'#fff':o.zone.color} strokeWidth={selected===o.zone.id?3:1.5} vectorEffect="non-scaling-stroke"/>{showCoverage&&o.zone.mapping&&<polygon points={o.zone.polygon.map(p=>p.join(',')).join(' ')} fill="none" stroke="#8db2c4" strokeDasharray="5 5" strokeWidth="4" vectorEffect="non-scaling-stroke"/>}<text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={-14} textAnchor="middle" fill="#fff" fontSize="22" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line1}</text><text transform={`translate(${p[0]} ${p[1]}) scale(1 ${config.width/config.height})`} x={0} y={14} textAnchor="middle" fill="#e0e8f0" fontSize="16" stroke="#0b2145" strokeWidth={3} paintOrder="stroke">{line2}</text></g>;})}
@@ -159,6 +160,10 @@ export default function VenueControlTower({job,video,venueId='main'}:{venueId?:s
               return <table aria-label="두 축제 들어옴 나감" className="w-full text-left text-xs"><thead><tr><th>구역</th><th>지금까지 들어옴</th><th>지금까지 나감</th><th>영상 전체 들어옴 / 나감</th></tr></thead>
                 <tbody>{zs.map(z=>{const r=row(z,ti),a=row(z,timeline.length-1);return <tr key={z}><td>{config.zones.find(v=>v.id===z)?.name??z}</td><td>{r.inn}명</td><td>{r.out}명</td><td>{a.inn} / {a.out}명</td></tr>;})}
                   <tr><td><b>두 축제 합계</b></td><td><b>{now.inn}명</b></td><td><b>{now.out}명</b></td><td>{all.inn} / {all.out}명</td></tr></tbody></table>;})()}
+            {phase==='during'&&flowCfg.cameras.filter(isCorridorCamera).map(c=>{const cf=corridorFlows(c,flowTime);const zn=(id:string)=>config.zones.find(v=>v.id===id)?.name??id;
+              return <table key={c.id} aria-label="두 축제 사이 이동" className="w-full text-left text-xs"><thead><tr><th>두 축제 사이 이동 ({c.name})</th><th>지금까지</th><th>최근 1분</th><th>10초 뒤</th><th>30초 뒤</th><th>60초 뒤</th></tr></thead>
+                <tbody>{cf.map(f=><tr key={f.from}><td>{zn(f.from)} → {zn(f.to)}</td><td>{f.cumulative}명</td><td>{f.perMin.toFixed(1)}명/분</td>{[10,30,60].map(h=><td key={h}>{f.predicted[h].toFixed(1)}명</td>)}</tr>)}
+                  {!cf.length||!cameraRates(c,flowTime)?<tr><td colSpan={6}>이 시각에는 통로 영상이 없습니다.</td></tr>:null}</tbody></table>;})}
             <ul className="venue-actions">{flowCfg.cameras.map(c=>{const cum=cumulativeAt(c.gate,flowTime-c.start_offset_s);const act=timeline.cameraActive[c.id];const r=cameraRates(c,flowTime);return <li key={c.id}><b>{c.name}</b> — {!c.job_id?'분석 결과 연결 전 (계산에서 제외)':!c.gate?'경계선 통과 수 미계산 (python -m app.gate_flow)':!act||flowTime<act[0]||flowTime>=act[1]?'이 시각 영상 없음':`누적 ${c.axis==='x'?`왼쪽 ${cum?.entries??0} · 오른쪽 ${cum?.exits??0}`:`들어감 ${cum?.entries??0} · 나옴 ${cum?.exits??0}`}명 · 최근 1분 ${c.axis==='x'?`왼쪽 ${r?.minus.toFixed(0)} · 오른쪽 ${r?.plus.toFixed(0)}`:`들어감 ${r?.minus.toFixed(0)} · 나옴 ${r?.plus.toFixed(0)}`}명/분`}<br/><small>{c.meaning}</small></li>;})}</ul>
             <p className="venue-muted">{flowCfg.sync_note} 구역 인원 = 시작 인원 + 누적 유입 − 누적 유출. 카메라가 보지 못한 출입구와 추적이 끊긴 사람은 빠지므로 실제 이동의 하한입니다.
               {forecastH?` ${forecastH}초 뒤 예측은 최근 1분 순유입 속도가 그대로 이어진다는 가정입니다.`:''} * 표시는 계산값이 0 아래로 내려간 것으로, 시작 인원이 실제보다 적을 수 있다는 뜻입니다.</p>

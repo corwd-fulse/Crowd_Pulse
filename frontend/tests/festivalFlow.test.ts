@@ -107,3 +107,19 @@ describe('post-festival cumulative exits', () => {
     expect(cumulativeAt(null, 1)).toBeNull();
   });
 });
+
+import {corridorFlows, isCorridorCamera} from '../src/services/festivalFlow';
+
+describe('corridor flows between festivals', () => {
+  it('reports both directions with cumulative counts and constant-rate forecasts', () => {
+    const mid = cfg().cameras[0];
+    expect(isCorridorCamera(mid)).toBe(true);
+    expect(isCorridorCamera(cfg().cameras[1])).toBe(false);
+    const f = corridorFlows(mid, 1);
+    const up = f.find((x) => x.to === 'top')!, down = f.find((x) => x.to === 'bottom')!;
+    expect(up).toMatchObject({from: 'bottom', cumulative: 2});
+    expect(down).toMatchObject({from: 'top', cumulative: 1});
+    expect(up.perMin).toBeCloseTo(60);          // 2 people in 2 seconds
+    expect(up.predicted[30]).toBeCloseTo(30);
+  });
+});

@@ -141,3 +141,22 @@ export function cumulativeAt(g: GateCounts | null, time: number): {exits: number
   const sides = g.exit_sides ? Object.fromEntries(EXIT_SIDES.map((k) => [k, g.exit_sides![k].slice(0, t + 1).reduce((a, b) => a + b, 0)])) as Record<ExitSide, number> : null;
   return {exits, entries, sides};
 }
+
+/** 두 축제 사이 통로 카메라(한 방향이 한 축제 -1, 다른 축제 +1). 방향별 누적과 H초 뒤 예상 이동 인원. */
+export interface CorridorFlow {from: string; to: string; cumulative: number; perMin: number; predicted: Record<number, number>}
+export function corridorFlows(cam: FlowCamera, time: number, horizons: readonly number[] = [10, 30, 60]): CorridorFlow[] {
+  const g = cam.gate;
+  if (!g) return [];
+  const local = time - cam.start_offset_s;
+  const cum = cumulativeAt(g, local), rate = cameraRates(cam, time);
+  const out: CorridorFlow[] = [];
+  for (const [dir, weights] of [['plus', cam.plus], ['minus', cam.minus]] as const) {
+    const from = Object.keys(weights).find((z) => weights[z] < 0), to = Object.keys(weights).find((z) => weights[z] > 0);
+    if (!from || !to) continue;
+    const perMin = rate ? rate[dir] : 0;
+    out.push({from, to, cumulative: cum ? (dir === 'plus' ? cum.exits : cum.entries) : 0, perMin,
+      predicted: Object.fromEntries(horizons.map((h) => [h, perMin / 60 * h]))});
+  }
+  return out;
+}
+export const isCorridorCamera = (c: FlowCamera) => Object.keys(c.plus).length > 1 || Object.keys(c.minus).length > 1;
